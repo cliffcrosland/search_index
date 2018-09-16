@@ -1,0 +1,6 @@
+[package]
+name = "search_index"
+version = "0.1.0"
+authors = ["Cliff Crosland <cliffcrosland@gmail.com>"]
+
+[dependencies]
