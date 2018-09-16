@@ -6,9 +6,6 @@ use generational_arena::*;
 use std::cmp::Ordering;
 use std::fmt;
 
-type NodeId = GenerationalId;
-
-
 // A skip list is a key-value store that allows you to visit entries in ascending order by key.
 // Insert, read, and delete operations execute in expected O(log n) time. Insert and remove use
 // expected O(log n) space.
@@ -95,6 +92,8 @@ struct Node<K, V> where K: Key {
     entry: Option<SkipListEntry<K, V>>,
     levels: Vec<Option<NodeId>>,
 }
+
+type NodeId = GenerationalId;
 
 // Params to use when searching for a target. Can search for an exact match, or can search for the
 // earliest key that has a given prefix.
