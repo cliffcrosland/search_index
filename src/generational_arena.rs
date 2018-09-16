@@ -1,4 +1,4 @@
-// Represents an arena in which you can store items of a given type.
+// Represents an arena in which you can store items of a specific type.
 //
 // Items are stored in a vector of slots. When an item is inserted into the arena, it will be
 // inserted (in constant time) into an empty slot, if one exists. If there are no empty slots, a
@@ -22,6 +22,7 @@ pub struct GenerationalArena<T> {
 // Represents an identifier allowing you to access an item stored in the arena.
 //
 // Returned from the insert operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GenerationalId {
     // Index of the item's slot in the arena vector.
     index: usize,
