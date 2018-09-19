@@ -1,4 +1,5 @@
 extern crate rand;
+extern crate test;
 
 use self::rand::Rng;
 
@@ -437,6 +438,7 @@ impl <'a, K, V> Iterator for SkipListPrefixIterator<'a, K, V> where K: Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use self::test::Bencher;
 
     #[test]
     fn test_basic_operations() {
@@ -615,5 +617,51 @@ mod tests {
             entry = iter.next();
             assert!(entry.is_none());
         }
+    }
+
+    #[bench]
+    fn bench_get(b: &mut Bencher) {
+        let mut skip_list = SkipList::new();
+        let value = "foo".to_string();
+        for i in 0..1_000_000 {
+            let key = i.to_string();
+            skip_list.set(&key, value.clone());
+        }
+        let key = 123456.to_string();
+        b.iter(|| skip_list.get(&key) );
+    }
+
+    #[bench]
+    fn bench_set(b: &mut Bencher) {
+        let n = 1_000_000;
+        let mut pairs = Vec::new();
+        let value = "foo".to_string();
+        for i in 0..n {
+            let key = i.to_string();
+            pairs.push((key, value.clone()));
+        }
+        let mut skip_list = SkipList::new();
+        let mut count = 0;
+        b.iter(|| {
+            let (key, value) = &pairs[count];
+            skip_list.set(key, (*value).clone());
+            count += 1;
+            count %= pairs.len()
+        });
+    }
+
+    #[bench]
+    fn bench_iterate_1000(b: &mut Bencher) {
+        let mut skip_list = SkipList::new();
+        let n = 1000;
+        let value = "foo".to_string();
+        for i in 0..n {
+            let key = i.to_string();
+            skip_list.set(&key, value.clone());
+        }
+        b.iter(|| {
+            let mut iter = skip_list.iter();
+            while let Some(_entry) = iter.next() {}
+        });
     }
 }
