@@ -109,6 +109,26 @@ struct SearchParams<'a, K: 'a> where K: Key {
     prefix_match: bool,
 }
 
+impl <'a, K> SearchParams<'a, K> where K: Key {
+    pub fn new(target: &'a K) -> SearchParams<'a, K> {
+        SearchParams {
+            target: target,
+            record_traversal: false,
+            prefix_match: false,
+        }
+    }
+
+    pub fn record_traversal(mut self) -> SearchParams<'a, K> {
+        self.record_traversal = true;
+        self
+    }
+
+    pub fn use_prefix_match(mut self) -> SearchParams<'a, K> {
+        self.prefix_match = true;
+        self
+    }
+}
+
 // The result of a search for a particular target. Returns the closest predecessor and the node
 // that immediately follows the predecessor (which may match the target). Can optionally return the
 // last predecessor node found on each level during traversal, which is helpful for writes.
@@ -147,11 +167,7 @@ impl <K, V> SkipList<K, V> where K: Key {
 
     // Set a key-value entry in the skip list.
     pub fn set(&mut self, key: &K, value: V) {
-        let params = SearchParams { 
-            target: key,
-            record_traversal: true,
-            prefix_match: false,
-        };
+        let params = SearchParams::new(key).record_traversal();
         let res = self.search(&params);
 
         // If a matching entry was found, simply replace the value in the entry.
@@ -206,11 +222,7 @@ impl <K, V> SkipList<K, V> where K: Key {
 
     // Get a shared reference to the value that matches the key.
     pub fn get(&self, key: &K) -> Option<&V> {
-        let params = SearchParams { 
-            target: key,
-            record_traversal: false,
-            prefix_match: false,
-        };
+        let params = SearchParams::new(key);
         let res = self.search(&params);
         if !res.success {
             return None;
@@ -223,11 +235,7 @@ impl <K, V> SkipList<K, V> where K: Key {
 
     // Get an exclusive reference to the value that matches the key.
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
-        let params = SearchParams { 
-            target: key,
-            record_traversal: false,
-            prefix_match: false,
-        };
+        let params = SearchParams::new(key);
         let res = self.search(&params);
         if !res.success {
             return None;
@@ -241,11 +249,7 @@ impl <K, V> SkipList<K, V> where K: Key {
     // Remove the entry corresponding to the given key. If the entry exists, remove it and return
     // true. Otherwise, return false.
     pub fn remove(&mut self, key: &K) -> bool {
-        let params = SearchParams { 
-            target: key,
-            record_traversal: true,
-            prefix_match: false,
-        };
+        let params = SearchParams::new(key).record_traversal();
         let res = self.search(&params);
         if !res.success {
             return false;
@@ -281,11 +285,7 @@ impl <K, V> SkipList<K, V> where K: Key {
 
     // Return an iterator that starts at the entry that matches the given key.
     pub fn iter_at(&self, key: &K) -> SkipListIterator<K, V> {
-        let params = SearchParams { 
-            target: key,
-            record_traversal: false,
-            prefix_match: false,
-        };
+        let params = SearchParams::new(key);
         let res = self.search(&params);
         match res.success {
             true => self.iterator(res.cur),
@@ -295,11 +295,7 @@ impl <K, V> SkipList<K, V> where K: Key {
 
     // Return an iterator that visits all of the entries that match the given prefix.
     pub fn prefix_iter_at(&self, prefix: &K) -> SkipListPrefixIterator<K, V> {
-        let params = SearchParams { 
-            target: prefix,
-            record_traversal: false,
-            prefix_match: true,
-        };
+        let params = SearchParams::new(prefix).use_prefix_match();
         let res = self.search(&params);
         match res.success {
             true => self.prefix_iterator((*prefix).clone(), res.cur),
