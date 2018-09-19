@@ -438,7 +438,6 @@ impl <'a, K, V> Iterator for SkipListPrefixIterator<'a, K, V> where K: Key {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use self::test::Bencher;
 
     #[test]
     fn test_basic_operations() {
@@ -618,6 +617,12 @@ mod tests {
             assert!(entry.is_none());
         }
     }
+}
+
+#[cfg(all(feature = "benchmarks", test))]
+mod benchmarks {
+    use super::*;
+    use self::test::Bencher;
 
     #[bench]
     fn bench_get(b: &mut Bencher) {

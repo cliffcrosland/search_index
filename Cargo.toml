@@ -5,3 +5,6 @@ authors = ["Cliff Crosland <cliffcrosland@gmail.com>"]
 
 [dependencies]
 rand = "0.5.5"
+
+[features]
+benchmarks = []
