@@ -129,7 +129,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_basic_operations() {
+    fn performs_basic_operations_correctly() {
         let mut arena = GenerationalArena::new();
 
         // insert 3 items

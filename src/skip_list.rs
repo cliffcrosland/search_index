@@ -1,5 +1,4 @@
 extern crate rand;
-extern crate test;
 
 use self::rand::Rng;
 
@@ -26,8 +25,8 @@ pub struct SkipList<K, V> where K: Key {
 
 // A key-value pair in the skip list.
 pub struct SkipListEntry<K, V> where K: Key {
-    key: K,
-    value: V,
+    pub key: K,
+    pub value: V,
 }
 
 // An iterator that allows you to scan through the elements in ascending order by key.
@@ -165,8 +164,9 @@ impl <K, V> SkipList<K, V> where K: Key {
         self.nodes.len() - 1 
     }
 
-    // Set a key-value entry in the skip list.
-    pub fn set(&mut self, key: &K, value: V) {
+    // Set a key-value entry in the skip list. Return exclusive reference to the value. Useful for
+    // in-place modification after insert.
+    pub fn set(&mut self, key: &K, value: V) -> &mut V {
         let params = SearchParams::new(key).record_traversal();
         let res = self.search(&params);
 
@@ -176,12 +176,13 @@ impl <K, V> SkipList<K, V> where K: Key {
             let node = self.nodes.get_mut(&id).unwrap();
             let entry = node.entry.as_mut().unwrap();
             entry.value = value;
-            return;
+            return &mut entry.value;
         } 
 
         // Otherwise, construct a new node.
+        let entry = SkipListEntry { key: (*key).clone(), value: value };
         let node_id = self.nodes.insert(Node {
-            entry: Some(SkipListEntry { key: (*key).clone(), value: value }),
+            entry: Some(entry),
             levels: Vec::new(),
         });
 
@@ -218,6 +219,8 @@ impl <K, V> SkipList<K, V> where K: Key {
                 break;
             }
         }
+
+        &mut self.nodes.get_mut(&node_id).unwrap().entry.as_mut().unwrap().value
     }
 
     // Get a shared reference to the value that matches the key.
@@ -233,7 +236,8 @@ impl <K, V> SkipList<K, V> where K: Key {
         Some(value)
     }
 
-    // Get an exclusive reference to the value that matches the key.
+    // Get an exclusive reference to the value that matches the key. Useful for in-place
+    // modification.
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         let params = SearchParams::new(key);
         let res = self.search(&params);
@@ -244,6 +248,19 @@ impl <K, V> SkipList<K, V> where K: Key {
         let node = self.nodes.get_mut(&id).unwrap();
         let value = &mut node.entry.as_mut().unwrap().value; 
         Some(value)
+    }
+
+    // Get an exclusive reference to the value that matches the key, inserting a value if one does
+    // not exist already. Useful for in-place modification.
+    pub fn get_mut_with_default<F: FnOnce() -> V>(&mut self, key: &K, default: F) -> &mut V {
+        let params = SearchParams::new(key);
+        let res = self.search(&params);
+        if !res.success {
+            return self.set(key, default());
+        }
+        let id = res.cur.unwrap();
+        let node = self.nodes.get_mut(&id).unwrap();
+        &mut node.entry.as_mut().unwrap().value
     }
 
     // Remove the entry corresponding to the given key. If the entry exists, remove it and return
@@ -436,7 +453,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_basic_operations() {
+    fn performs_basic_operations_correctly() {
         let mut skip_list = SkipList::new();
         let k1 = "apple".to_string();
         let k2 = "banana".to_string();

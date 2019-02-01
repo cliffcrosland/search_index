@@ -5,6 +5,8 @@ authors = ["Cliff Crosland <cliffcrosland@gmail.com>"]
 
 [dependencies]
 rand = "0.5.5"
+serde_json = "1.0"
+unicode-segmentation = "1.2.1"
 
 [features]
 benchmarks = []
