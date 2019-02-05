@@ -4,9 +4,6 @@ use skip_list::{SkipList, Key};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
-use serde_json::{Value, Error};
-
-
 /// # Search Index
 ///
 /// The search index consists of three main components:
@@ -122,13 +119,13 @@ struct SearchIndex {
     // We use skip-lists below to compute intersections efficiently.
 
     // Term to Postings index
-    term_postings: SkipList<String, SkipList<Posting, ()>>,
+    term_postings: HashMap<String, SkipList<Posting, ()>>,
 
     // 3-Gram to Terms index
-    trigram_terms: SkipList<String, SkipList<String, ()>>,
+    trigram_terms: HashMap<String, HashSet<String>>,
 
     // Soundex to Terms index
-    soundex_terms: SkipList<String, SkipList<String, ()>>,
+    soundex_terms: HashMap<String, HashSet<String>>,
 
     // The following maps are useful for supporting the remove(document_id)
     // operation. Can quickly look up the terms and document postings to remove.
@@ -169,19 +166,18 @@ impl Key for Posting {
     fn key_cmp(&self, query: &Posting, prefix_match: bool) -> Ordering {
         if prefix_match {
             // Prefix match simply compares document_id
-            self.document_id.cmp(&query.document_id)
-        } else {
-            // Sorted by <document_id, field_index, term_index>
-            let mut ord = self.document_id.cmp(&query.document_id);
-            if ord != Ordering::Equal {
-                return ord;
-            }
-            ord = self.field_index.cmp(&query.field_index);
-            if ord != Ordering::Equal {
-                return ord;
-            }
-            self.term_index.cmp(&query.term_index)
+            return self.document_id.cmp(&query.document_id);
         }
+        // Sorted by <document_id, field_index, term_index>
+        let mut ord = self.document_id.cmp(&query.document_id);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+        ord = self.field_index.cmp(&query.field_index);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+        self.term_index.cmp(&query.term_index)
     }
 }
 
@@ -204,9 +200,9 @@ impl SearchIndex {
     pub fn new(config: Config) -> SearchIndex {
         SearchIndex {
             config: config,
-            term_postings: SkipList::new(),
-            trigram_terms: SkipList::new(),
-            soundex_terms: SkipList::new(),
+            term_postings: HashMap::new(),
+            trigram_terms: HashMap::new(),
+            soundex_terms: HashMap::new(),
             id_terms: HashMap::new(),
             id_postings: HashMap::new(),
         }
@@ -228,8 +224,34 @@ impl SearchIndex {
         }
     }
 
-    // TODO(cliff): Implement.
-    pub fn search(&self, _query: &String) -> Vec<Hit> {
+    pub fn search(&self, query: &String) -> Vec<Hit> {
+        // 1. Analyze query. Translate to terms.
+        let query_terms = Analyzer::text_to_terms(query);
+
+        // 2. Create pairs of <query term, posting list>
+        let mut query_term_postings = Vec::with_capacity(query_terms.len());
+        for (query_term_idx, query_term) in query_terms.iter().enumerate() {
+            if let Some(postings) = self.term_postings.get(query_term) {
+                // If the query term appears in index, add its postings.
+                query_term_postings.push((query_term_idx, postings));
+            }
+            // TODO(cliff): If query term does not appear in the index, we should try to find
+            // similar terms by using our spelling correction data structures: trigrams and
+            // soundexes.
+        }
+
+        // 3. Look for documents that contain all of the terms from the query. That is, look for
+        //    the documents that contain the conjunction of all of the terms from the query, i.e.
+        //    `term1 AND term2 AND term3 ...` etc.
+        //
+        //    To accomplish this, we get the posting lists for each term. We then merge together
+        //    the posting lists, keeping entries where document_id is the same.
+        query_term_postings.sort_by_key(|pair| pair.1.len());
+        let mut merged_postings = SkipList::new();
+        for (_query_term_idx, postings) in query_term_postings.into_iter() {
+            merged_postings = SkipList::intersect(&merged_postings, postings, true);
+        }
+
         Vec::new()
     }
 
@@ -241,19 +263,19 @@ impl SearchIndex {
 
     fn insert(&mut self, term: &String, posting: Posting) {
         // 1. Update Term to Postings index
-        let postings = self.term_postings.get_mut_with_default(term, || SkipList::new());
+        let postings = self.term_postings.entry((*term).clone()).or_insert_with(|| SkipList::new());
         postings.set(&posting, ());
 
-        // 2. Update 3-Gram to Terms index
+        // 2. Update Trigram to Terms index
         for trigram in Analyzer::trigrams(term) {
-            let mut terms = self.trigram_terms.get_mut_with_default(&trigram, || SkipList::new());
-            terms.set(term, ());
+            let mut terms = self.trigram_terms.entry(trigram).or_insert_with(|| HashSet::new());
+            terms.insert((*term).clone());
         }
 
         // 3. Update Soundex to Terms index
         let soundex = Analyzer::soundex(term);
-        let terms = self.soundex_terms.get_mut_with_default(&soundex, || SkipList::new());
-        terms.set(term, ());
+        let terms = self.soundex_terms.entry(soundex).or_insert_with(|| HashSet::new());
+        terms.insert((*term).clone());
 
         let document_id = posting.document_id;
 
@@ -280,7 +302,7 @@ impl SearchIndex {
         for term in terms.iter() {
             let mut empty;
             {
-                let mut term_postings = self.term_postings.get_mut(&term);
+                let mut term_postings = self.term_postings.get_mut(term);
                 if term_postings.is_none() {
                     continue;
                 }
@@ -291,7 +313,7 @@ impl SearchIndex {
                 empty = term_postings.len() == 0;
             }
             if empty {
-                self.term_postings.remove(&term);
+                self.term_postings.remove(term);
             }
         }
     }
@@ -314,7 +336,7 @@ mod tests {
                 "bio".to_string()
             ],
         });
-        let res: Result<Value, Error> = serde_json::from_str(r#"
+        let res: Result<serde_json::Value, _> = serde_json::from_str(r#"
             {
                 "name": "Jane Smith",
                 "locations": [
@@ -373,10 +395,10 @@ mod tests {
         assert!(terms_for_trigram.is_some());
         let terms_for_trigram = terms_for_trigram.unwrap();
         assert_eq!(2, terms_for_trigram.len());
-        let mut iter = terms_for_trigram.iter();
-        assert_eq!("great", iter.next().unwrap().key);
-        assert_eq!("neat", iter.next().unwrap().key);
-        assert!(iter.next().is_none());
+        let mut terms_for_trigram: Vec<&String> = terms_for_trigram.iter().collect();
+        terms_for_trigram.sort();
+        assert_eq!("great", terms_for_trigram[0]);
+        assert_eq!("neat", terms_for_trigram[1]);
     }
 
     #[test]

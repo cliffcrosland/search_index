@@ -1,10 +1,10 @@
 extern crate serde_json;
 extern crate unicode_segmentation;
 
-use serde_json::{Error, Value};
+use serde_json::Value;
 use unicode_segmentation::UnicodeSegmentation;
 
-pub enum Analyzer {}
+pub struct Analyzer;
 
 /// Analyzes text and generates normalized strings that are useful to store in search index data
 /// structures.
@@ -176,6 +176,8 @@ impl Analyzer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use serde_json::Error;
 
     #[test]
     fn generates_terms_from_json_document_properly() {

@@ -6,55 +6,55 @@ use generational_arena::*;
 use std::cmp::Ordering;
 use std::fmt;
 
-// A skip list is a key-value store that allows you to visit entries in ascending order by key.
-// Insert, read, and delete operations execute in expected O(log n) time. Insert and remove use
-// expected O(log n) space.
-//
-// The skip list is composed of multiple levels of linked lists that are sorted by key. Higher
-// levels have fewer nodes than lower levels. Search begins at the highest level, so it skips over
-// many nodes with each step, stepping down into lower levels as it hones in on the target.
-//
-// When a new node is inserted, we first find where it should go in the bottom level, i.e. level 0,
-// in log(n) time. Then, we begin flipping a coin, promoting it into the next level every time we
-// flip "heads," stopping when we flip "tails." Hence, all entries appear in level 0, and, on
-// average, 1/2 of all nodes also appear in level 1, 1/4 in level 2, 1/8 in level 3, etc.
+/// A skip list is a key-value store that allows you to visit entries in ascending order by key.
+/// Insert, read, and delete operations execute in expected O(log n) time. Insert and remove use
+/// expected O(log n) space.
+///
+/// The skip list is composed of multiple levels of linked lists that are sorted by key. Higher
+/// levels have fewer nodes than lower levels. Search begins at the highest level, so it skips over
+/// many nodes with each step, stepping down into lower levels as it hones in on the target.
+///
+/// When a new node is inserted, we first find where it should go in the bottom level, i.e. level
+/// 0, in log(n) time. Then, we begin flipping a coin, promoting it into the next level every time
+/// we flip "heads," stopping when we flip "tails." Hence, all entries appear in level 0, and, on
+/// average, 1/2 of all nodes also appear in level 1, 1/4 in level 2, 1/8 in level 3, etc.
 pub struct SkipList<K, V> where K: Key {
     head_id: NodeId,
     nodes: GenerationalArena<Node<K, V>>,
 }
 
-// A key-value pair in the skip list.
+/// A key-value pair in the skip list.
 pub struct SkipListEntry<K, V> where K: Key {
     pub key: K,
     pub value: V,
 }
 
-// An iterator that allows you to scan through the elements in ascending order by key.
+/// An iterator that allows you to scan through the elements in ascending order by key.
 pub struct SkipListIterator<'a, K: 'a, V: 'a> where K: Key {
     cur: Option<NodeId>,
     nodes: &'a GenerationalArena<Node<K, V>>,
 }
 
-// An iterator that allows you to scan through the elements whose keys match a specific prefix in
-// ascending order by key.
+/// An iterator that allows you to scan through the elements whose keys match a specific prefix in
+/// ascending order by key.
 pub struct SkipListPrefixIterator<'a, K: 'a, V: 'a> where K: Key {
     prefix: K,
     cur: Option<NodeId>,
     nodes: &'a GenerationalArena<Node<K, V>>,
 }
 
-// Represents the behavior that a key in the skip-list must have. Notably, the key must be clonable
-// and support both full comparison and prefix comparison.
+/// Represents the behavior that a key in the skip-list must have. Notably, the key must be
+/// clonable and support both full comparison and prefix comparison.
 pub trait Key: Clone + fmt::Debug {
-    // If prefix match disabled, return full comparison ordering.
-    //
-    // If prefix match enabled:
-    // - if query is a prefix of self, return Ordering::Equal.
-    // - otherwise, return full comparison ordering.
+    /// If prefix match disabled, return full comparison ordering.
+    ///
+    /// If prefix match enabled:
+    /// - if query is a prefix of self, return Ordering::Equal.
+    /// - otherwise, return full comparison ordering.
     fn key_cmp(&self, query: &Self, prefix_match: bool) -> Ordering;
 }
 
-// Since it is common to use String keys, an implementation is provided here.
+/// Since it is common to use String keys, an implementation is provided here.
 impl Key for String {
     fn key_cmp(&self, query: &String, prefix_match: bool) -> Ordering {
         if !prefix_match {
@@ -149,6 +149,7 @@ struct SearchResult {
 }
 
 impl <K, V> SkipList<K, V> where K: Key {
+    /// Constructs a new `SkipList`.
     pub fn new() -> SkipList<K, V> {
         let head = Node { entry: None, levels: vec![None] };
         let mut nodes = GenerationalArena::new();
@@ -158,15 +159,15 @@ impl <K, V> SkipList<K, V> where K: Key {
         }
     }
 
-    // The number of entries in the skip list.
+    /// The number of entries in the skip list.
     pub fn len(&self) -> usize { 
         // head node not included in count
         self.nodes.len() - 1 
     }
 
-    // Set a key-value entry in the skip list. Return exclusive reference to the value. Useful for
-    // in-place modification after insert.
-    pub fn set(&mut self, key: &K, value: V) -> &mut V {
+    /// Set a key-value entry in the skip list. Return exclusive reference to the value. Useful for
+    /// in-place modification after insert.
+    pub fn set(&mut self, key: &K, value: V) {
         let params = SearchParams::new(key).record_traversal();
         let res = self.search(&params);
 
@@ -176,7 +177,7 @@ impl <K, V> SkipList<K, V> where K: Key {
             let node = self.nodes.get_mut(&id).unwrap();
             let entry = node.entry.as_mut().unwrap();
             entry.value = value;
-            return &mut entry.value;
+            return;
         } 
 
         // Otherwise, construct a new node.
@@ -219,11 +220,9 @@ impl <K, V> SkipList<K, V> where K: Key {
                 break;
             }
         }
-
-        &mut self.nodes.get_mut(&node_id).unwrap().entry.as_mut().unwrap().value
     }
 
-    // Get a shared reference to the value that matches the key.
+    /// Get a shared reference to the value that matches the key.
     pub fn get(&self, key: &K) -> Option<&V> {
         let params = SearchParams::new(key);
         let res = self.search(&params);
@@ -236,8 +235,8 @@ impl <K, V> SkipList<K, V> where K: Key {
         Some(value)
     }
 
-    // Get an exclusive reference to the value that matches the key. Useful for in-place
-    // modification.
+    /// Get an exclusive reference to the value that matches the key. Useful for in-place
+    /// modification.
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         let params = SearchParams::new(key);
         let res = self.search(&params);
@@ -250,21 +249,8 @@ impl <K, V> SkipList<K, V> where K: Key {
         Some(value)
     }
 
-    // Get an exclusive reference to the value that matches the key, inserting a value if one does
-    // not exist already. Useful for in-place modification.
-    pub fn get_mut_with_default<F: FnOnce() -> V>(&mut self, key: &K, default: F) -> &mut V {
-        let params = SearchParams::new(key);
-        let res = self.search(&params);
-        if !res.success {
-            return self.set(key, default());
-        }
-        let id = res.cur.unwrap();
-        let node = self.nodes.get_mut(&id).unwrap();
-        &mut node.entry.as_mut().unwrap().value
-    }
-
-    // Remove the entry corresponding to the given key. If the entry exists, remove it and return
-    // true. Otherwise, return false.
+    /// Remove the entry corresponding to the given key. If the entry exists, remove it and return
+    /// true. Otherwise, return false.
     pub fn remove(&mut self, key: &K) -> bool {
         let params = SearchParams::new(key).record_traversal();
         let res = self.search(&params);
@@ -293,14 +279,14 @@ impl <K, V> SkipList<K, V> where K: Key {
         true
     }
 
-    // Return an iterator that visits all of the entries in the skip list in ascending order by
-    // key.
+    /// Return an iterator that visits all of the entries in the skip list in ascending order by
+    /// key.
     pub fn iter(&self) -> SkipListIterator<K, V> {
         let head = self.nodes.get(&self.head_id).unwrap();
         self.iterator(head.levels[0])
     }
 
-    // Return an iterator that starts at the entry that matches the given key.
+    /// Return an iterator that starts at the entry that matches the given key.
     pub fn iter_at(&self, key: &K) -> SkipListIterator<K, V> {
         let params = SearchParams::new(key);
         let res = self.search(&params);
@@ -310,7 +296,7 @@ impl <K, V> SkipList<K, V> where K: Key {
         }
     }
 
-    // Return an iterator that visits all of the entries that match the given prefix.
+    /// Return an iterator that visits all of the entries that match the given prefix.
     pub fn prefix_iter_at(&self, prefix: &K) -> SkipListPrefixIterator<K, V> {
         let params = SearchParams::new(prefix).use_prefix_match();
         let res = self.search(&params);
@@ -318,6 +304,119 @@ impl <K, V> SkipList<K, V> where K: Key {
             true => self.prefix_iterator((*prefix).clone(), res.cur),
             false => self.prefix_iterator((*prefix).clone(), None),
         }
+    }
+
+    /// Intersect two skip lists together, returning a new skip list.
+    ///
+    /// If `prefix_match` is false, return all entries from `a` and `b` whose keys are found in
+    /// both lists.
+    ///
+    /// If `prefix_match` is true, return all entries from `a` and `b` as follows: if a key in `b`
+    /// is a prefix of a key in `a`, we consider that an intersection. Let the key from `b` be
+    /// called `key_b`. We then add each entry in `a` and `b` where `key_b` is a prefix of the
+    /// entry's key.
+    ///
+    /// ## Example where `prefix_match == true` would be useful:
+    ///
+    /// Say we have user records that have `organization_id` and `user_id`, and say that we have
+    /// multiple lists of user records. Say that we want to be able to quickly find the
+    /// `organization_id` intersection of these lists of user records.
+    ///
+    /// To accomplish this, you could store these user records in skip lists and define the
+    /// `key_cmp` function such that it only compares `organization_id` when `prefix_match` is
+    /// true.
+    ///
+    /// TODO(cliff): `prefix_match` is awkward. Is there a better approach?
+    ///
+    pub fn intersect(a: &SkipList<K, V>, b: &SkipList<K, V>, prefix_match: bool) -> SkipList<K, V>
+        where V: Clone {
+        if a.len() > b.len() {
+            return Self::intersect(b, a, prefix_match);
+        }
+
+        let mut ret = SkipList::new();
+        if a.len() == 0 {
+            let mut iter = b.iter();
+            while let Some(entry) = iter.next() {
+                ret.set(&entry.key, entry.value.clone());
+            }
+            return ret;
+        }
+
+        let mut a_cur_id = a.nodes.get(&a.head_id).unwrap().levels[0];
+        let mut b_cur_id = b.nodes.get(&b.head_id).unwrap().levels[0];
+        while a_cur_id.is_some() && b_cur_id.is_some() {
+            let a_cur = a.nodes.get(&a_cur_id.unwrap()).unwrap();
+            let b_cur = b.nodes.get(&b_cur_id.unwrap()).unwrap();
+            let a_entry = a_cur.entry.as_ref().unwrap();
+            let b_entry = b_cur.entry.as_ref().unwrap();
+            match a_entry.key.key_cmp(&b_entry.key, prefix_match) {
+                Ordering::Less => {
+                    // Skip ahead as far as we can
+                    let skip_ahead_level = Self::intersect_skip_ahead_level(a, a_cur,
+                                                                            &b_entry.key,
+                                                                            prefix_match);
+                    a_cur_id = a_cur.levels[skip_ahead_level];
+                },
+                Ordering::Greater => {
+                    // Skip ahead as far as we can
+                    let skip_ahead_level = Self::intersect_skip_ahead_level(b, b_cur,
+                                                                            &a_entry.key,
+                                                                            prefix_match);
+                    b_cur_id = b_cur.levels[skip_ahead_level];
+                },
+                Ordering::Equal => {
+                    // Intersection found! Visit all entries in `a` and `b` that are equal to the
+                    // current key under `key_cmp`. Add them all to the result.
+                    let key = &b_entry.key;
+                    while a_cur_id.is_some() {
+                        let a_cur = a.nodes.get(&a_cur_id.unwrap()).unwrap();
+                        let a_entry = a_cur.entry.as_ref().unwrap();
+                        if a_entry.key.key_cmp(key, prefix_match) != Ordering::Equal {
+                            break;
+                        }
+                        ret.set(&a_entry.key, a_entry.value.clone());
+                        // advance by 1 entry (i.e. don't skip ahead using a higher level)
+                        a_cur_id = a_cur.levels[0];
+                    }
+                    while b_cur_id.is_some() {
+                        let b_cur = b.nodes.get(&b_cur_id.unwrap()).unwrap();
+                        let b_entry = b_cur.entry.as_ref().unwrap();
+                        if b_entry.key.key_cmp(key, prefix_match) != Ordering::Equal {
+                            break;
+                        }
+                        ret.set(&b_entry.key, b_entry.value.clone());
+                        // advance by 1 entry (i.e. don't skip ahead using a higher level)
+                        b_cur_id = b_cur.levels[0];
+                    }
+                }
+            }
+        }
+
+        ret
+    }
+
+    // Look at all of the skip pointers in `node.levels` and find the one that advances the
+    // furthest without surpassing `advance_up_to_key`.
+    fn intersect_skip_ahead_level(list: &SkipList<K, V>,
+                                  node: &Node<K, V>,
+                                  advance_up_to_key: &K,
+                                  prefix_match: bool) -> usize {
+        for level in 1..node.levels.len() {
+            let next_node_id = node.levels[level];
+            if next_node_id.is_none() {
+                return level - 1;
+            }
+            let next_node_id = next_node_id.unwrap();
+            let next_node = list.nodes.get(&next_node_id).unwrap();
+            let next_entry = next_node.entry.as_ref().unwrap();
+            match next_entry.key.key_cmp(advance_up_to_key, prefix_match) {
+                Ordering::Equal => return level,
+                Ordering::Greater => return level - 1,
+                Ordering::Less => continue,
+            }
+        }
+        0
     }
 
     #[allow(dead_code)]
@@ -628,6 +727,89 @@ mod tests {
             // no more matches
             entry = iter.next();
             assert!(entry.is_none());
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct MergeTestKey {
+        record_id: u64,
+        field_id: u64,
+        timestamp: u64,
+    }
+
+    impl MergeTestKey {
+        fn new(record_id: u64, field_id: u64, timestamp: u64) -> MergeTestKey {
+            MergeTestKey {
+                record_id: record_id,
+                field_id: field_id,
+                timestamp: timestamp,
+            }
+        }
+    }
+
+    impl Key for MergeTestKey {
+        fn key_cmp(&self, query: &MergeTestKey, prefix_match: bool) -> Ordering {
+            if prefix_match {
+                // Prefix match simply compares record_id
+                return self.record_id.cmp(&query.record_id);
+            }
+            // Sorted by <record_id, field_id, timestamp>
+            let mut ord = self.record_id.cmp(&query.record_id);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+            ord = self.field_id.cmp(&query.field_id);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+            self.timestamp.cmp(&query.timestamp)
+        }
+    }
+
+    #[test]
+    fn intersects_skip_lists_together_properly() {
+        let mut a = SkipList::new();
+        a.set(&MergeTestKey::new(1, 1, 1), ());
+        a.set(&MergeTestKey::new(1, 2, 2), ());
+        a.set(&MergeTestKey::new(1, 2, 3), ());
+        a.set(&MergeTestKey::new(3, 1, 2), ());
+        a.set(&MergeTestKey::new(3, 9, 2), ());
+        a.set(&MergeTestKey::new(4, 1, 9), ());
+        let mut b = SkipList::new();
+        b.set(&MergeTestKey::new(1, 1, 5), ());
+        b.set(&MergeTestKey::new(1, 2, 2), ());
+        b.set(&MergeTestKey::new(2, 8, 3), ());
+        b.set(&MergeTestKey::new(4, 1, 4), ());
+        b.set(&MergeTestKey::new(5, 4, 4), ());
+
+        // Intersect using full match. Only result should be key (1, 2, 2) since it is the only key
+        // that appears in both lists.
+        let full_match_merge_result = SkipList::intersect(&a, &b, false);
+        assert_eq!(full_match_merge_result.len(), 1);
+        let mut iter = full_match_merge_result.iter();
+        let entry = iter.next();
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().key, MergeTestKey::new(1, 2, 2));
+        assert!(iter.next().is_none());
+
+        // Intersect using prefix match only. `key_cmp` is defined such that only `record_id` is
+        // compared when `prefix_match` is set to true. Hence, the result should have all entries
+        // that have `record_id` 1 or 4 since those are the only `record_ids` found in both lists.
+        let prefix_merge_result = SkipList::intersect(&a, &b, true);
+        assert_eq!(prefix_merge_result.len(), 6);
+        let expected_keys = vec![
+            MergeTestKey::new(1, 1, 1),
+            MergeTestKey::new(1, 1, 5),
+            MergeTestKey::new(1, 2, 2),
+            MergeTestKey::new(1, 2, 3),
+            MergeTestKey::new(4, 1, 4),
+            MergeTestKey::new(4, 1, 9),
+        ];
+        let mut iter = prefix_merge_result.iter();
+        let mut i = 0;
+        while let Some(entry) = iter.next() {
+            assert_eq!(entry.key, expected_keys[i]);
+            i += 1;
         }
     }
 }
