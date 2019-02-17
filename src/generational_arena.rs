@@ -57,7 +57,7 @@ impl <T> GenerationalArena<T> {
                 slot.value = Some(value);
                 self.next_free = slot.next_free;
                 slot.next_free = None;
-                GenerationalId { index: index, generation: slot.generation }
+                GenerationalId { index, generation: slot.generation }
             },
 
             // Otherwise, increase the size of the arena vector.
@@ -69,7 +69,7 @@ impl <T> GenerationalArena<T> {
                     next_free: None,
                 };
                 self.arena.push(slot);
-                GenerationalId { index: index, generation: 0 }
+                GenerationalId { index, generation: 0 }
             },
         }
     }

@@ -135,6 +135,9 @@ struct SearchIndex {
 
     // Map from document_id to Posting structs.
     id_postings: HashMap<u64, HashSet<Posting>>,
+
+    // Map from term to document_ids. Useful for computing df(term) == num docs that contain term.
+    term_ids: HashMap<String, HashSet<u64>>,
 }
 
 struct Config {
@@ -199,12 +202,13 @@ struct Hit {
 impl SearchIndex {
     pub fn new(config: Config) -> SearchIndex {
         SearchIndex {
-            config: config,
+            config,
             term_postings: HashMap::new(),
             trigram_terms: HashMap::new(),
             soundex_terms: HashMap::new(),
             id_terms: HashMap::new(),
             id_postings: HashMap::new(),
+            term_ids: HashMap::new(),
         }
     }
 
@@ -212,40 +216,38 @@ impl SearchIndex {
         for field_index in 0..self.config.fields.len() {
             let field = self.config.fields[field_index].clone();
             let terms = Analyzer::field_to_terms(document_json, &field);
-            for term_index in 0..terms.len() {
-                let term = &terms[term_index];
-                let posting = Posting {
-                    document_id: document_id,
-                    field_index: field_index,
-                    term_index: term_index,
-                };
+            for (term_index, term) in terms.iter().enumerate() {
+                let posting = Posting { document_id, field_index, term_index };
                 self.insert(term, posting);
             }
         }
     }
 
-    pub fn search(&self, query: &String) -> Vec<Hit> {
-        // 1. Analyze query. Translate to terms.
+    pub fn search(&self, query: &str) -> Vec<Hit> {
+        // let mut ret = SearchResult::new();
+
+        // Analyze query. Translate to terms.
         let query_terms = Analyzer::text_to_terms(query);
 
-        // 2. Create pairs of <query term, posting list>
+        // Create pairs of <query term, posting list>
         let mut query_term_postings = Vec::with_capacity(query_terms.len());
         for (query_term_idx, query_term) in query_terms.iter().enumerate() {
             if let Some(postings) = self.term_postings.get(query_term) {
                 // If the query term appears in index, add its postings.
                 query_term_postings.push((query_term_idx, postings));
+            } else if let Some(correction) = self.recommend_spelling_correction(query_term) {
+                // Recommend a spelling correction using trigrams and/or soundexes indices
+                // ret.recommend_spelling_correction.push((query_term_idx, correction));
+                dbg!(correction);
             }
-            // TODO(cliff): If query term does not appear in the index, we should try to find
-            // similar terms by using our spelling correction data structures: trigrams and
-            // soundexes.
         }
 
-        // 3. Look for documents that contain all of the terms from the query. That is, look for
-        //    the documents that contain the conjunction of all of the terms from the query, i.e.
-        //    `term1 AND term2 AND term3 ...` etc.
+        // Look for documents that contain all of the terms from the query. That is, look for the
+        // documents that contain the conjunction of all of the terms from the query, i.e.  `term1
+        // AND term2 AND term3 ...` etc.
         //
-        //    To accomplish this, we get the posting lists for each term. We then merge together
-        //    the posting lists, keeping entries where document_id is the same.
+        // To accomplish this, we retrieve the posting lists for each individual term and find the
+        // intersection by document_id.
         query_term_postings.sort_by_key(|pair| pair.1.len());
         let mut merged_postings = SkipList::new();
         for (_query_term_idx, postings) in query_term_postings.into_iter() {
@@ -261,31 +263,35 @@ impl SearchIndex {
         self.id_postings.remove(&document_id);
     }
 
-    fn insert(&mut self, term: &String, posting: Posting) {
-        // 1. Update Term to Postings index
-        let postings = self.term_postings.entry((*term).clone()).or_insert_with(|| SkipList::new());
+    fn insert(&mut self, term: &str, posting: Posting) {
+        // Update Term to Postings index
+        let postings = self.term_postings.entry(term.to_string()).or_insert_with(SkipList::new);
         postings.set(&posting, ());
 
-        // 2. Update Trigram to Terms index
+        // Update Trigram to Terms index
         for trigram in Analyzer::trigrams(term) {
-            let mut terms = self.trigram_terms.entry(trigram).or_insert_with(|| HashSet::new());
-            terms.insert((*term).clone());
+            let mut terms = self.trigram_terms.entry(trigram).or_insert_with(HashSet::new);
+            terms.insert(term.to_string());
         }
 
-        // 3. Update Soundex to Terms index
+        // Update Soundex to Terms index
         let soundex = Analyzer::soundex(term);
-        let terms = self.soundex_terms.entry(soundex).or_insert_with(|| HashSet::new());
-        terms.insert((*term).clone());
+        let terms = self.soundex_terms.entry(soundex).or_insert_with(HashSet::new);
+        terms.insert(term.to_string());
 
         let document_id = posting.document_id;
 
         // Insert into id_terms
-        let terms = self.id_terms.entry(document_id).or_insert_with(|| HashSet::new());
-        terms.insert((*term).clone());
+        let terms = self.id_terms.entry(document_id).or_insert_with(HashSet::new);
+        terms.insert(term.to_string());
 
         // Insert into id_postings
-        let postings = self.id_postings.entry(document_id).or_insert_with(|| HashSet::new());
+        let postings = self.id_postings.entry(document_id).or_insert_with(HashSet::new);
         postings.insert(posting);
+
+        // Insert into term_ids
+        let document_ids = self.term_ids.entry(term.to_string()).or_insert_with(HashSet::new);
+        document_ids.insert(document_id);
     }
 
     fn remove_term_postings(&mut self, document_id: u64) {
@@ -315,6 +321,33 @@ impl SearchIndex {
             if empty {
                 self.term_postings.remove(term);
             }
+        }
+    }
+
+    fn recommend_spelling_correction(&self, term: &str) -> Option<String> {
+        // First, look for good trigram match
+        let trigrams = Analyzer::trigrams(term);
+        let mut possible_corrections = HashSet::new();
+        let mut edit_distances = Vec::new();
+        for trigram in trigrams {
+            if let Some(trigram_terms) = self.trigram_terms.get(&trigram) {
+                for trigram_term in trigram_terms {
+                    if possible_corrections.contains(trigram_term) {
+                        continue;
+                    }
+                    possible_corrections.insert(trigram_term);
+                    let edit_distance = Analyzer::edit_distance(trigram_term, &term.to_string());
+                    edit_distances.push((trigram_term, edit_distance));
+                }
+            }
+        }
+        // TODO(cliff): Return several spelling corrections, try running search with each, return the
+        // most fruitful alternative query, etc.
+        edit_distances.sort_by_key(|pair| pair.1);
+        if edit_distances.is_empty() {
+            None
+        } else {
+            Some(edit_distances[0].0.clone())
         }
     }
 }
@@ -432,13 +465,13 @@ mod tests {
         let posting1 = Posting {
             field_index: 0,
             term_index: 0,
-            document_id: document_id,
+            document_id,
         };
         search_index.insert(&"hello".to_string(), posting1);
         let posting2 = Posting {
             field_index: 0,
             term_index: 1,
-            document_id: document_id,
+            document_id,
         };
         search_index.insert(&"hello".to_string(), posting2);
 

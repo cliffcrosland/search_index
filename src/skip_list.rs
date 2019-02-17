@@ -111,7 +111,7 @@ struct SearchParams<'a, K: 'a> where K: Key {
 impl <'a, K> SearchParams<'a, K> where K: Key {
     pub fn new(target: &'a K) -> SearchParams<'a, K> {
         SearchParams {
-            target: target,
+            target,
             record_traversal: false,
             prefix_match: false,
         }
@@ -155,7 +155,7 @@ impl <K, V> SkipList<K, V> where K: Key {
         let mut nodes = GenerationalArena::new();
         SkipList {
             head_id: nodes.insert(head),
-            nodes: nodes,
+            nodes,
         }
     }
 
@@ -181,7 +181,7 @@ impl <K, V> SkipList<K, V> where K: Key {
         } 
 
         // Otherwise, construct a new node.
-        let entry = SkipListEntry { key: (*key).clone(), value: value };
+        let entry = SkipListEntry { key: (*key).clone(), value };
         let node_id = self.nodes.insert(Node {
             entry: Some(entry),
             levels: Vec::new(),
@@ -290,9 +290,10 @@ impl <K, V> SkipList<K, V> where K: Key {
     pub fn iter_at(&self, key: &K) -> SkipListIterator<K, V> {
         let params = SearchParams::new(key);
         let res = self.search(&params);
-        match res.success {
-            true => self.iterator(res.cur),
-            false => self.iterator(None),
+        if res.success {
+            self.iterator(res.cur)
+        } else {
+            self.iterator(None)
         }
     }
 
@@ -300,9 +301,10 @@ impl <K, V> SkipList<K, V> where K: Key {
     pub fn prefix_iter_at(&self, prefix: &K) -> SkipListPrefixIterator<K, V> {
         let params = SearchParams::new(prefix).use_prefix_match();
         let res = self.search(&params);
-        match res.success {
-            true => self.prefix_iterator((*prefix).clone(), res.cur),
-            false => self.prefix_iterator((*prefix).clone(), None),
+        if res.success {
+            self.prefix_iterator((*prefix).clone(), res.cur)
+        } else {
+            self.prefix_iterator((*prefix).clone(), None)
         }
     }
 
@@ -336,8 +338,7 @@ impl <K, V> SkipList<K, V> where K: Key {
 
         let mut ret = SkipList::new();
         if a.len() == 0 {
-            let mut iter = b.iter();
-            while let Some(entry) = iter.next() {
+            for entry in b.iter() {
                 ret.set(&entry.key, entry.value.clone());
             }
             return ret;
@@ -439,15 +440,15 @@ impl <K, V> SkipList<K, V> where K: Key {
 
     fn iterator(&self, cur: Option<NodeId>) -> SkipListIterator<K, V> {
         SkipListIterator {
-            cur: cur,
+            cur,
             nodes: &self.nodes,
         }
     }
 
     fn prefix_iterator(&self, prefix: K, cur: Option<NodeId>) -> SkipListPrefixIterator<K, V> {
         SkipListPrefixIterator {
-            prefix: prefix,
-            cur: cur,
+            prefix,
+            cur,
             nodes: &self.nodes,
         }
     }
@@ -517,9 +518,7 @@ impl <'a, K, V> Iterator for SkipListIterator<'a, K, V> where K: Key {
     type Item = &'a SkipListEntry<K, V>;
 
     fn next(&mut self) -> Option<&'a SkipListEntry<K, V>> {
-        if self.cur.is_none() {
-            return None;
-        }
+        self.cur?;
         let cur_id = self.cur.unwrap();
         let cur_node = self.nodes.get(&cur_id).unwrap();
         let res = cur_node.entry.as_ref();
@@ -532,9 +531,7 @@ impl <'a, K, V> Iterator for SkipListPrefixIterator<'a, K, V> where K: Key {
     type Item = &'a SkipListEntry<K, V>;
 
     fn next(&mut self) -> Option<&'a SkipListEntry<K, V>> {
-        if self.cur.is_none() {
-            return None;
-        }
+        self.cur?;
         let cur_id = self.cur.unwrap();
         let cur_node = self.nodes.get(&cur_id).unwrap();
         let cur_key = &cur_node.entry.as_ref().unwrap().key;
@@ -739,11 +736,7 @@ mod tests {
 
     impl MergeTestKey {
         fn new(record_id: u64, field_id: u64, timestamp: u64) -> MergeTestKey {
-            MergeTestKey {
-                record_id: record_id,
-                field_id: field_id,
-                timestamp: timestamp,
-            }
+            MergeTestKey { record_id, field_id, timestamp }
         }
     }
 

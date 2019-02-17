@@ -1,6 +1,8 @@
 extern crate serde_json;
 extern crate unicode_segmentation;
 
+use std::{cmp, mem};
+
 use serde_json::Value;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -23,19 +25,18 @@ impl Analyzer {
     /// known as Terms. If the field is a Json Object or Array, recursively traverse through the
     /// field and generate terms from each string you encounter along the way. If the field is a
     /// String, generate normalized tokens from it.
-    pub fn field_to_terms(document_json: &Value, field: &String) -> Vec<String> {
+    pub fn field_to_terms(document_json: &Value, field: &str) -> Vec<String> {
         let mut ret = Vec::new();
-        match document_json {
-            Value::Object(obj) => {
-                obj.get(field).map(|v| Self::field_to_terms_iter(v, &mut ret));
-            },
-            _ => {},
+        if let Value::Object(obj) = document_json {
+            if let Some(v) = obj.get(field) {
+                Self::field_to_terms_iter(v, &mut ret);
+            }
         }
         ret
     }
 
     /// Read through the string `text` and generate normalized string tokens known as terms.
-    pub fn text_to_terms(text: &String) -> Vec<String> {
+    pub fn text_to_terms(text: &str) -> Vec<String> {
         let mut ret = Vec::new();
         Self::text_to_terms_impl(text, &mut ret);
         ret
@@ -49,8 +50,8 @@ impl Analyzer {
     /// "benevolent" =>
     /// ["$be", "ben", "ene", "nev", "evo", "vol", "ole", "len", "ent", "nt$"]
     /// ```
-    pub fn trigrams(term: &String) -> Vec<String> {
-        if term.len() == 0 {
+    pub fn trigrams(term: &str) -> Vec<String> {
+        if term.is_empty() {
             return vec![];
         }
         let chars: Vec<char> = term.chars().collect();
@@ -95,8 +96,8 @@ impl Analyzer {
     ///    - R => 6
     /// 3. Coalesce repeated digits into one digit.
     /// 4. Remove all zeroes from the result. If less than 4 chars long, pad the end with zeroes.
-    pub fn soundex(term: &String) -> String {
-        if term.len() == 0 {
+    pub fn soundex(term: &str) -> String {
+        if term.is_empty() {
             return String::new();
         }
 
@@ -112,8 +113,8 @@ impl Analyzer {
 
         // Translate other letters into digits. Remove repeated digits.
         let mut prev_digit = None;
-        for i in 1..chars.len() {
-            let digit = match chars[i] {
+        for ch in chars.iter().skip(1) {
+            let digit = match ch {
                 'a' | 'e' | 'i' | 'o' | 'u' | 'h' | 'w' | 'y' => '0',
                 'b' | 'f' | 'p' | 'v' => '1',
                 'c' | 'g' | 'j' | 'k' | 'q' | 's' | 'x' | 'z' => '2',
@@ -146,6 +147,37 @@ impl Analyzer {
         digits.into_iter().collect()
     }
 
+    /// Compute Levenshtein Edit Distance between the given string values. Requires O(min(m, n))
+    /// space and O(m * n) time.
+    pub fn edit_distance(str1: &str, str2: &str) -> usize {
+        let chars1: Vec<char> = str1.chars().collect();
+        let chars2: Vec<char> = str2.chars().collect();
+        if chars2.len() < chars1.len() {
+            return Self::edit_distance(str2, str1);
+        }
+        let m = chars1.len();
+        let n = chars2.len();
+        let mut column1 = vec![0; m + 1];
+        let mut column2 = vec![0; m + 1];
+        for row in 0..=m {
+            column1[row] = row;
+        }
+        for col in 1..=n {
+            column2[0] = col;
+            for row in 1..=m {
+                let delete = column2[row - 1] + 1;
+                let append = column1[row] + 1;
+                let mut replace = column1[row - 1];
+                if chars1[row - 1] != chars2[col - 1] {
+                    replace += 1;
+                }
+                column2[row] = cmp::min(cmp::min(delete, append), replace)
+            }
+            mem::swap(&mut column1, &mut column2);
+        }
+        column1[m]
+    }
+
     fn field_to_terms_iter(value: &Value, terms: &mut Vec<String>) {
         match value {
             Value::String(text) => Self::text_to_terms_impl(text, terms),
@@ -166,7 +198,7 @@ impl Analyzer {
         }
     }
 
-    fn text_to_terms_impl(text: &String, terms: &mut Vec<String>) {
+    fn text_to_terms_impl(text: &str, terms: &mut Vec<String>) {
         for word in text.unicode_words() {
             terms.push(word.to_lowercase());
         }
@@ -253,5 +285,14 @@ mod tests {
         assert_eq!("h655", Analyzer::soundex(&"hermann".to_string()));
         assert_eq!("c410", Analyzer::soundex(&"cliff".to_string()));
         assert_eq!("s315", Analyzer::soundex(&"stephanie".to_string()));
+    }
+
+    #[test]
+    fn computes_edit_distance() {
+        assert_eq!(0, Analyzer::edit_distance(&"hello".to_string(), &"hello".to_string()));
+        assert_eq!(3, Analyzer::edit_distance(&"he".to_string(), &"hello".to_string()));
+        assert_eq!(4, Analyzer::edit_distance(&"hello".to_string(), &"world".to_string()));
+        assert_eq!(3, Analyzer::edit_distance(&"carrot".to_string(), &"riot".to_string()));
+        assert_eq!(3, Analyzer::edit_distance(&"foo".to_string(), &"bar".to_string()));
     }
 }
