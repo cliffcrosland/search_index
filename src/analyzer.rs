@@ -69,16 +69,19 @@ impl Analyzer {
                 ret.push(trigram);
             }
         }
-        ret.push(format!("{}{}$", chars[chars.len() - 2], chars[chars.len() - 1]));
+        ret.push(format!(
+            "{}{}$",
+            chars[chars.len() - 2],
+            chars[chars.len() - 1]
+        ));
         ret
     }
 
-
     /// Return a four char string representing roughly how a term sounds. Particularly useful for
     /// matching person names. The algorithm can be found in 3.4 in "Chris Manning, Introduction to
-    /// Information Retrieval, 1st Edition (Cambridge University Press, July 7, 2008)". 
+    /// Information Retrieval, 1st Edition (Cambridge University Press, July 7, 2008)".
     ///
-    /// Example: 
+    /// Example:
     /// ```
     /// Soundex("herman") => "h655"
     /// ```
@@ -122,7 +125,7 @@ impl Analyzer {
                 'l' => '4',
                 'm' | 'n' => '5',
                 'r' => '6',
-                _ => '0'
+                _ => '0',
             };
             if prev_digit.is_some() && prev_digit.unwrap() == digit {
                 continue;
@@ -185,7 +188,7 @@ impl Analyzer {
                 for val in arr {
                     Self::field_to_terms_iter(&val, terms);
                 }
-            },
+            }
             Value::Object(map) => {
                 // Sort map entries by key. Add terms from each entry's value in order.
                 let mut sorted_entries: Vec<(&String, &Value)> = map.iter().collect();
@@ -193,7 +196,7 @@ impl Analyzer {
                 for (_, value) in sorted_entries {
                     Self::field_to_terms_iter(&value, terms);
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -213,7 +216,8 @@ mod tests {
 
     #[test]
     fn generates_terms_from_json_document_properly() {
-        let res: Result<Value, Error> = serde_json::from_str(r#"
+        let res: Result<Value, Error> = serde_json::from_str(
+            r#"
             {
                 "name": "Jane Smith",
                 "location": {
@@ -226,45 +230,68 @@ mod tests {
                     "She is a composer and former professional violinist."
                 ]
             }
-        "#);
+        "#,
+        );
         assert!(res.is_ok());
         let val = res.unwrap();
 
         // name
-        assert_eq!(vec!["jane", "smith"], Analyzer::field_to_terms(&val, &"name".to_string()));
+        assert_eq!(
+            vec!["jane", "smith"],
+            Analyzer::field_to_terms(&val, &"name".to_string())
+        );
 
         // location. terms always gathered in ascending key order
         assert_eq!(
-            vec!["san", "francisco", "ca", "94123"], 
+            vec!["san", "francisco", "ca", "94123"],
             Analyzer::field_to_terms(&val, &"location".to_string())
         );
 
         // bios
         let expected_bio_terms = vec![
-            "jane", "serves", "on", "the", "board", "of", "directors", "of", "the", "sf",
-            "symphony", "she", "is", "a", "composer", "and", "former", "professional", "violinist"
+            "jane",
+            "serves",
+            "on",
+            "the",
+            "board",
+            "of",
+            "directors",
+            "of",
+            "the",
+            "sf",
+            "symphony",
+            "she",
+            "is",
+            "a",
+            "composer",
+            "and",
+            "former",
+            "professional",
+            "violinist",
         ];
-        assert_eq!(expected_bio_terms, Analyzer::field_to_terms(&val, &"bios".to_string()));
+        assert_eq!(
+            expected_bio_terms,
+            Analyzer::field_to_terms(&val, &"bios".to_string())
+        );
     }
 
     #[test]
     fn generates_terms_from_text_properly() {
         assert_eq!(
             vec!["the", "rain", "in", "spain", "stays", "mainly", "in", "the", "plain"],
-            Analyzer::text_to_terms(
-                &"The rain in spain stays mainly in the plain.".to_string()
-            )
+            Analyzer::text_to_terms(&"The rain in spain stays mainly in the plain.".to_string())
         );
 
         let long_text = &r#"
             Fly me to the moon! Let me play among the stars.  
             Let me see what spring is like on Jupiter and Mars. 
             In other words, hold my hand.
-        "#.to_string();
+        "#
+        .to_string();
         let expected_terms = vec![
             "fly", "me", "to", "the", "moon", "let", "me", "play", "among", "the", "stars", "let",
             "me", "see", "what", "spring", "is", "like", "on", "jupiter", "and", "mars", "in",
-            "other", "words", "hold", "my", "hand"
+            "other", "words", "hold", "my", "hand",
         ];
         assert_eq!(expected_terms, Analyzer::text_to_terms(long_text));
     }
@@ -275,7 +302,7 @@ mod tests {
         assert_eq!(vec!["$a$"], Analyzer::trigrams(&"a".to_string()));
         assert_eq!(vec!["$ab", "ab$"], Analyzer::trigrams(&"ab".to_string()));
         assert_eq!(
-            vec!["$cl", "cli", "lif", "iff", "ff$"], 
+            vec!["$cl", "cli", "lif", "iff", "ff$"],
             Analyzer::trigrams(&"cliff".to_string())
         );
     }
@@ -289,10 +316,25 @@ mod tests {
 
     #[test]
     fn computes_edit_distance() {
-        assert_eq!(0, Analyzer::edit_distance(&"hello".to_string(), &"hello".to_string()));
-        assert_eq!(3, Analyzer::edit_distance(&"he".to_string(), &"hello".to_string()));
-        assert_eq!(4, Analyzer::edit_distance(&"hello".to_string(), &"world".to_string()));
-        assert_eq!(3, Analyzer::edit_distance(&"carrot".to_string(), &"riot".to_string()));
-        assert_eq!(3, Analyzer::edit_distance(&"foo".to_string(), &"bar".to_string()));
+        assert_eq!(
+            0,
+            Analyzer::edit_distance(&"hello".to_string(), &"hello".to_string())
+        );
+        assert_eq!(
+            3,
+            Analyzer::edit_distance(&"he".to_string(), &"hello".to_string())
+        );
+        assert_eq!(
+            4,
+            Analyzer::edit_distance(&"hello".to_string(), &"world".to_string())
+        );
+        assert_eq!(
+            3,
+            Analyzer::edit_distance(&"carrot".to_string(), &"riot".to_string())
+        );
+        assert_eq!(
+            3,
+            Analyzer::edit_distance(&"foo".to_string(), &"bar".to_string())
+        );
     }
 }

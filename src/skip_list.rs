@@ -18,26 +18,38 @@ use std::fmt;
 /// 0, in log(n) time. Then, we begin flipping a coin, promoting it into the next level every time
 /// we flip "heads," stopping when we flip "tails." Hence, all entries appear in level 0, and, on
 /// average, 1/2 of all nodes also appear in level 1, 1/4 in level 2, 1/8 in level 3, etc.
-pub struct SkipList<K, V> where K: Key {
+pub struct SkipList<K, V>
+where
+    K: Key,
+{
     head_id: NodeId,
     nodes: GenerationalArena<Node<K, V>>,
 }
 
 /// A key-value pair in the skip list.
-pub struct SkipListEntry<K, V> where K: Key {
+pub struct SkipListEntry<K, V>
+where
+    K: Key,
+{
     pub key: K,
     pub value: V,
 }
 
 /// An iterator that allows you to scan through the elements in ascending order by key.
-pub struct SkipListIterator<'a, K: 'a, V: 'a> where K: Key {
+pub struct SkipListIterator<'a, K: 'a, V: 'a>
+where
+    K: Key,
+{
     cur: Option<NodeId>,
     nodes: &'a GenerationalArena<Node<K, V>>,
 }
 
 /// An iterator that allows you to scan through the elements whose keys match a specific prefix in
 /// ascending order by key.
-pub struct SkipListPrefixIterator<'a, K: 'a, V: 'a> where K: Key {
+pub struct SkipListPrefixIterator<'a, K: 'a, V: 'a>
+where
+    K: Key,
+{
     prefix: K,
     cur: Option<NodeId>,
     nodes: &'a GenerationalArena<Node<K, V>>,
@@ -88,7 +100,10 @@ impl Key for String {
 
 // Represents a single node in the skip list. The head of the skip list is a special node that does
 // not have a key-value entry, but all other nodes have a key-value entry.
-struct Node<K, V> where K: Key {
+struct Node<K, V>
+where
+    K: Key,
+{
     entry: Option<SkipListEntry<K, V>>,
     levels: Vec<Option<NodeId>>,
 }
@@ -97,7 +112,10 @@ type NodeId = GenerationalId;
 
 // Params to use when searching for a target. Can search for an exact match, or can search for the
 // earliest key that has a given prefix.
-struct SearchParams<'a, K: 'a> where K: Key {
+struct SearchParams<'a, K: 'a>
+where
+    K: Key,
+{
     // The target to match.
     target: &'a K,
 
@@ -108,7 +126,10 @@ struct SearchParams<'a, K: 'a> where K: Key {
     prefix_match: bool,
 }
 
-impl <'a, K> SearchParams<'a, K> where K: Key {
+impl<'a, K> SearchParams<'a, K>
+where
+    K: Key,
+{
     pub fn new(target: &'a K) -> SearchParams<'a, K> {
         SearchParams {
             target,
@@ -148,10 +169,16 @@ struct SearchResult {
     traversal_stack: Vec<NodeId>,
 }
 
-impl <K, V> SkipList<K, V> where K: Key {
+impl<K, V> SkipList<K, V>
+where
+    K: Key,
+{
     /// Constructs a new `SkipList`.
     pub fn new() -> SkipList<K, V> {
-        let head = Node { entry: None, levels: vec![None] };
+        let head = Node {
+            entry: None,
+            levels: vec![None],
+        };
         let mut nodes = GenerationalArena::new();
         SkipList {
             head_id: nodes.insert(head),
@@ -160,9 +187,9 @@ impl <K, V> SkipList<K, V> where K: Key {
     }
 
     /// The number of entries in the skip list.
-    pub fn len(&self) -> usize { 
+    pub fn len(&self) -> usize {
         // head node not included in count
-        self.nodes.len() - 1 
+        self.nodes.len() - 1
     }
 
     /// Set a key-value entry in the skip list. Return exclusive reference to the value. Useful for
@@ -178,10 +205,13 @@ impl <K, V> SkipList<K, V> where K: Key {
             let entry = node.entry.as_mut().unwrap();
             entry.value = value;
             return;
-        } 
+        }
 
         // Otherwise, construct a new node.
-        let entry = SkipListEntry { key: (*key).clone(), value };
+        let entry = SkipListEntry {
+            key: (*key).clone(),
+            value,
+        };
         let node_id = self.nodes.insert(Node {
             entry: Some(entry),
             levels: Vec::new(),
@@ -245,7 +275,7 @@ impl <K, V> SkipList<K, V> where K: Key {
         }
         let id = res.cur.unwrap();
         let node = self.nodes.get_mut(&id).unwrap();
-        let value = &mut node.entry.as_mut().unwrap().value; 
+        let value = &mut node.entry.as_mut().unwrap().value;
         Some(value)
     }
 
@@ -331,7 +361,9 @@ impl <K, V> SkipList<K, V> where K: Key {
     /// TODO(cliff): `prefix_match` is awkward. Is there a better approach?
     ///
     pub fn intersect(a: &SkipList<K, V>, b: &SkipList<K, V>, prefix_match: bool) -> SkipList<K, V>
-        where V: Clone {
+    where
+        V: Clone,
+    {
         if a.len() > b.len() {
             return Self::intersect(b, a, prefix_match);
         }
@@ -354,18 +386,16 @@ impl <K, V> SkipList<K, V> where K: Key {
             match a_entry.key.key_cmp(&b_entry.key, prefix_match) {
                 Ordering::Less => {
                     // Skip ahead as far as we can
-                    let skip_ahead_level = Self::intersect_skip_ahead_level(a, a_cur,
-                                                                            &b_entry.key,
-                                                                            prefix_match);
+                    let skip_ahead_level =
+                        Self::intersect_skip_ahead_level(a, a_cur, &b_entry.key, prefix_match);
                     a_cur_id = a_cur.levels[skip_ahead_level];
-                },
+                }
                 Ordering::Greater => {
                     // Skip ahead as far as we can
-                    let skip_ahead_level = Self::intersect_skip_ahead_level(b, b_cur,
-                                                                            &a_entry.key,
-                                                                            prefix_match);
+                    let skip_ahead_level =
+                        Self::intersect_skip_ahead_level(b, b_cur, &a_entry.key, prefix_match);
                     b_cur_id = b_cur.levels[skip_ahead_level];
-                },
+                }
                 Ordering::Equal => {
                     // Intersection found! Visit all entries in `a` and `b` that are equal to the
                     // current key under `key_cmp`. Add them all to the result.
@@ -399,10 +429,12 @@ impl <K, V> SkipList<K, V> where K: Key {
 
     // Look at all of the skip pointers in `node.levels` and find the one that advances the
     // furthest without surpassing `advance_up_to_key`.
-    fn intersect_skip_ahead_level(list: &SkipList<K, V>,
-                                  node: &Node<K, V>,
-                                  advance_up_to_key: &K,
-                                  prefix_match: bool) -> usize {
+    fn intersect_skip_ahead_level(
+        list: &SkipList<K, V>,
+        node: &Node<K, V>,
+        advance_up_to_key: &K,
+        prefix_match: bool,
+    ) -> usize {
         for level in 1..node.levels.len() {
             let next_node_id = node.levels[level];
             if next_node_id.is_none() {
@@ -428,11 +460,11 @@ impl <K, V> SkipList<K, V> where K: Key {
             match &cur_node.entry {
                 None => println!("Head, Levels: {:?}", cur_node.levels),
                 Some(entry) => {
-                    println!("Node id: {:?}, Key: {:?}, Levels: {:?}", 
-                             cur_id, 
-                             entry.key, 
-                             cur_node.levels);
-                },
+                    println!(
+                        "Node id: {:?}, Key: {:?}, Levels: {:?}",
+                        cur_id, entry.key, cur_node.levels
+                    );
+                }
             }
             cur = cur_node.levels[0];
         }
@@ -464,7 +496,7 @@ impl <K, V> SkipList<K, V> where K: Key {
             cur: None,
         };
 
-        // We must visit every level if: 
+        // We must visit every level if:
         // - we need to record the last node found on each level during traversal, or
         // - we need to find the earliest key that matches a prefix.
         let must_visit_every_level = params.record_traversal || params.prefix_match;
@@ -475,8 +507,8 @@ impl <K, V> SkipList<K, V> where K: Key {
             res.cur = prev_node.levels[level as usize];
             // Current key empty. Drop down a level and continue searching there.
             if res.cur.is_none() {
-                if params.record_traversal { 
-                    res.traversal_stack.push(prev_id); 
+                if params.record_traversal {
+                    res.traversal_stack.push(prev_id);
                 }
                 level -= 1;
                 continue;
@@ -490,11 +522,11 @@ impl <K, V> SkipList<K, V> where K: Key {
 
                 // Current key greater than target. Drop down a level and continue searching there.
                 Ordering::Greater => {
-                    if params.record_traversal { 
-                        res.traversal_stack.push(prev_id); 
+                    if params.record_traversal {
+                        res.traversal_stack.push(prev_id);
                     }
                     level -= 1;
-                },
+                }
 
                 // Current key matches target. Exit early if allowed. Otherwise, drop down a level
                 // and continue searching there.
@@ -507,14 +539,17 @@ impl <K, V> SkipList<K, V> where K: Key {
                     if !must_visit_every_level {
                         break;
                     }
-                },
+                }
             }
         }
         res
     }
 }
 
-impl <'a, K, V> Iterator for SkipListIterator<'a, K, V> where K: Key {
+impl<'a, K, V> Iterator for SkipListIterator<'a, K, V>
+where
+    K: Key,
+{
     type Item = &'a SkipListEntry<K, V>;
 
     fn next(&mut self) -> Option<&'a SkipListEntry<K, V>> {
@@ -527,7 +562,10 @@ impl <'a, K, V> Iterator for SkipListIterator<'a, K, V> where K: Key {
     }
 }
 
-impl <'a, K, V> Iterator for SkipListPrefixIterator<'a, K, V> where K: Key {
+impl<'a, K, V> Iterator for SkipListPrefixIterator<'a, K, V>
+where
+    K: Key,
+{
     type Item = &'a SkipListEntry<K, V>;
 
     fn next(&mut self) -> Option<&'a SkipListEntry<K, V>> {
@@ -736,7 +774,11 @@ mod tests {
 
     impl MergeTestKey {
         fn new(record_id: u64, field_id: u64, timestamp: u64) -> MergeTestKey {
-            MergeTestKey { record_id, field_id, timestamp }
+            MergeTestKey {
+                record_id,
+                field_id,
+                timestamp,
+            }
         }
     }
 
@@ -809,8 +851,8 @@ mod tests {
 
 #[cfg(all(feature = "benchmarks", test))]
 mod benchmarks {
-    use super::*;
     use self::test::Bencher;
+    use super::*;
 
     #[bench]
     fn bench_get(b: &mut Bencher) {
@@ -821,7 +863,7 @@ mod benchmarks {
             skip_list.set(&key, value.clone());
         }
         let key = 123456.to_string();
-        b.iter(|| skip_list.get(&key) );
+        b.iter(|| skip_list.get(&key));
     }
 
     #[bench]

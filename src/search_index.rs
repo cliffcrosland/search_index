@@ -1,5 +1,5 @@
 use analyzer::Analyzer;
-use skip_list::{SkipList, Key};
+use skip_list::{Key, SkipList};
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -32,19 +32,19 @@ use std::collections::{HashMap, HashSet};
 ///
 /// ```
 /// documents = [
-///     { 
-///         "id": 123, 
-///         "name": "Jane Smith", 
-///         "bio": "Hailing from SF, Jane Smith works at..." 
-///     }, 
+///     {
+///         "id": 123,
+///         "name": "Jane Smith",
+///         "bio": "Hailing from SF, Jane Smith works at..."
+///     },
 ///     {
 ///
-///         "id": 234, 
-///         "name": "Beth Chou", 
+///         "id": 234,
+///         "name": "Beth Chou",
 ///         "bio": "Worked on a team with Jane Gomez...",
 ///     }
 /// ]
-/// 
+///
 /// postings("jane", documents) => [
 ///     { document_id: 123, field: "name", index: 0 },
 ///     { document_id: 123, field: "bio", index: 3 },
@@ -65,12 +65,12 @@ use std::collections::{HashMap, HashSet};
 /// ]
 /// ```
 ///
-/// ### Soundex 
+/// ### Soundex
 ///
 /// A four char string representing roughly how a term sounds. Particularly
 /// useful for matching person names. The algorithm can be found in
 /// 3.4 in "Chris Manning, Introduction to Information Retrieval, 1st Edition
-/// (Cambridge University Press, July 7, 2008)". Example: 
+/// (Cambridge University Press, July 7, 2008)". Example:
 ///
 /// ```
 /// soundex("herman") => "h655"
@@ -157,7 +157,7 @@ struct Posting {
 
     // Which field the term was found in.
     field_index: usize,
-    
+
     // Where the term was found within the field. For example, if the field is:
     // "Welcome to San Francisco", and the term is "san", then term_index
     // would be 2, since "san" appears at index 2 in ["welcome", "to", "san",
@@ -217,7 +217,11 @@ impl SearchIndex {
             let field = self.config.fields[field_index].clone();
             let terms = Analyzer::field_to_terms(document_json, &field);
             for (term_index, term) in terms.iter().enumerate() {
-                let posting = Posting { document_id, field_index, term_index };
+                let posting = Posting {
+                    document_id,
+                    field_index,
+                    term_index,
+                };
                 self.insert(term, posting);
             }
         }
@@ -265,32 +269,50 @@ impl SearchIndex {
 
     fn insert(&mut self, term: &str, posting: Posting) {
         // Update Term to Postings index
-        let postings = self.term_postings.entry(term.to_string()).or_insert_with(SkipList::new);
+        let postings = self
+            .term_postings
+            .entry(term.to_string())
+            .or_insert_with(SkipList::new);
         postings.set(&posting, ());
 
         // Update Trigram to Terms index
         for trigram in Analyzer::trigrams(term) {
-            let mut terms = self.trigram_terms.entry(trigram).or_insert_with(HashSet::new);
+            let mut terms = self
+                .trigram_terms
+                .entry(trigram)
+                .or_insert_with(HashSet::new);
             terms.insert(term.to_string());
         }
 
         // Update Soundex to Terms index
         let soundex = Analyzer::soundex(term);
-        let terms = self.soundex_terms.entry(soundex).or_insert_with(HashSet::new);
+        let terms = self
+            .soundex_terms
+            .entry(soundex)
+            .or_insert_with(HashSet::new);
         terms.insert(term.to_string());
 
         let document_id = posting.document_id;
 
         // Insert into id_terms
-        let terms = self.id_terms.entry(document_id).or_insert_with(HashSet::new);
+        let terms = self
+            .id_terms
+            .entry(document_id)
+            .or_insert_with(HashSet::new);
         terms.insert(term.to_string());
 
         // Insert into id_postings
-        let postings = self.id_postings.entry(document_id).or_insert_with(HashSet::new);
+        let postings = self
+            .id_postings
+            .entry(document_id)
+            .or_insert_with(HashSet::new);
         postings.insert(posting);
 
         // Insert into term_ids
-        let document_ids = self.term_ids.entry(term.to_string()).or_insert_with(HashSet::new);
+        let document_ids = self
+            .term_ids
+            .entry(term.to_string())
+            .or_insert_with(HashSet::new);
         document_ids.insert(document_id);
     }
 
@@ -364,12 +386,13 @@ mod tests {
     fn indexes_documents_correctly() {
         let mut search_index = SearchIndex::new(Config {
             fields: vec![
-                "name".to_string(), 
-                "locations".to_string(), 
-                "bio".to_string()
+                "name".to_string(),
+                "locations".to_string(),
+                "bio".to_string(),
             ],
         });
-        let res: Result<serde_json::Value, _> = serde_json::from_str(r#"
+        let res: Result<serde_json::Value, _> = serde_json::from_str(
+            r#"
             {
                 "name": "Jane Smith",
                 "locations": [
@@ -381,7 +404,8 @@ mod tests {
                     "text": "The great Jane was born and raised in the very neat Denver, Colorado"
                 }
             }
-        "#);
+        "#,
+        );
         assert!(res.is_ok());
         let document_json = res.unwrap();
 
@@ -397,7 +421,11 @@ mod tests {
         assert_eq!(3, jane_postings.len());
         let mut iter = jane_postings.iter();
         assert_eq!(
-            &Posting { document_id: 123, field_index: 0, term_index: 0 }, 
+            &Posting {
+                document_id: 123,
+                field_index: 0,
+                term_index: 0
+            },
             &iter.next().unwrap().key
         );
         // the terms from "text" come before those from "title" since "text" is alphabetically
@@ -405,11 +433,19 @@ mod tests {
         //
         // ie. terms are: "the great jane was born and raised in denver colorado jane smith's bio"
         assert_eq!(
-            &Posting { document_id: 123, field_index: 2, term_index: 2 }, 
+            &Posting {
+                document_id: 123,
+                field_index: 2,
+                term_index: 2
+            },
             &iter.next().unwrap().key
         );
         assert_eq!(
-            &Posting { document_id: 123, field_index: 2, term_index: 13 }, 
+            &Posting {
+                document_id: 123,
+                field_index: 2,
+                term_index: 13
+            },
             &iter.next().unwrap().key
         );
         assert!(iter.next().is_none());
@@ -479,7 +515,14 @@ mod tests {
         assert_eq!(1, search_index.id_terms.len());
         assert_eq!(1, search_index.id_postings.len());
 
-        assert_eq!(2, search_index.term_postings.get(&"hello".to_string()).unwrap().len());
+        assert_eq!(
+            2,
+            search_index
+                .term_postings
+                .get(&"hello".to_string())
+                .unwrap()
+                .len()
+        );
         assert_eq!(1, search_index.id_terms.get(&document_id).unwrap().len());
         assert_eq!(2, search_index.id_postings.get(&document_id).unwrap().len());
 

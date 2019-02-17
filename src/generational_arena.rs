@@ -37,7 +37,7 @@ struct Slot<T> {
     next_free: Option<usize>,
 }
 
-impl <T> GenerationalArena<T> {
+impl<T> GenerationalArena<T> {
     pub fn new() -> GenerationalArena<T> {
         GenerationalArena {
             arena: Vec::new(),
@@ -57,8 +57,11 @@ impl <T> GenerationalArena<T> {
                 slot.value = Some(value);
                 self.next_free = slot.next_free;
                 slot.next_free = None;
-                GenerationalId { index, generation: slot.generation }
-            },
+                GenerationalId {
+                    index,
+                    generation: slot.generation,
+                }
+            }
 
             // Otherwise, increase the size of the arena vector.
             None => {
@@ -69,8 +72,11 @@ impl <T> GenerationalArena<T> {
                     next_free: None,
                 };
                 self.arena.push(slot);
-                GenerationalId { index, generation: 0 }
-            },
+                GenerationalId {
+                    index,
+                    generation: 0,
+                }
+            }
         }
     }
 
@@ -112,16 +118,20 @@ impl <T> GenerationalArena<T> {
                 slot.next_free = self.next_free;
                 self.next_free = Some(id.index);
                 true
-            },
+            }
             None => false,
         }
     }
 
     // Return the number of items stored.
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
     // Return the current number of slots in the arena.
-    pub fn capacity(&self) -> usize { self.arena.len() }
+    pub fn capacity(&self) -> usize {
+        self.arena.len()
+    }
 }
 
 #[cfg(test)]
@@ -160,11 +170,17 @@ mod tests {
         }
 
         // read out-of-range index
-        let bad_id1 = GenerationalId { index: 123, generation: 0 };
+        let bad_id1 = GenerationalId {
+            index: 123,
+            generation: 0,
+        };
         assert!(arena.get(&bad_id1).is_none());
 
         // read wrong generation
-        let bad_id2 = GenerationalId { index: 0, generation: 2 };
+        let bad_id2 = GenerationalId {
+            index: 0,
+            generation: 2,
+        };
         assert!(arena.get(&bad_id2).is_none());
 
         // Remove one of the items
