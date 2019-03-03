@@ -1,4 +1,4 @@
-use analyzer::Analyzer;
+use analyzer::{Analyzer, Term};
 use skip_list::{Key, SkipList};
 
 use std::cmp::Ordering;
@@ -112,7 +112,7 @@ use std::collections::{HashMap, HashSet};
 ///   - in a favored field (i.e. low field_index)
 ///   - close to the front of that field (i.e. low term_index)
 ///
-struct SearchIndex {
+pub struct SearchIndex {
     // Configuration for this search index.
     config: Config,
 
@@ -138,19 +138,37 @@ struct SearchIndex {
 
     // Map from term to document_ids. Useful for computing df(term) == num docs that contain term.
     term_ids: HashMap<String, HashSet<u64>>,
+
+    // Map from (document_id, field_index) to original document text.
+    //
+    // Eg. Let document_id = 123, fields = ["name", "location", "bio"]
+    //
+    // If location value is "San Francisco", then text[(123, 1)] == "San Francisco".
+    id_field_text: HashMap<(u64, usize), String>,
+
+    // Map from (document_id, field_index) to normalized terms and where they were found in the
+    // original text.
+    //
+    // Eg. let document_id = 123, fields = ["name", "location", "bio"]
+    //
+    // If location value is "San Francisco, CA 94115", then:
+    //
+    // text[(123, 1)] == [(0, 3, "san"), (5, 9, "francisco"), (18, 2, "ca"), (21, 5, "94115")]
+    id_field_terms: HashMap<(u64, usize), Vec<Term>>,
 }
 
-struct Config {
+#[derive(Clone, Debug)]
+pub struct Config {
     // Which fields to extract from the document JSON objects to be stored in
     // this index. The fields will be favored in the order they appear in this
     // vector. For example, if documents contain `bio`, `name`, and `location`
     // fields, and we want to favor `name` hits above `location` above `bio`,
     // then this vector should be `["name", "location", "bio"]`.
-    fields: Vec<String>,
+    pub fields: Vec<String>,
 }
 
 // Represents the location of a term in a document.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 struct Posting {
     // The ID of the document.
     document_id: u64,
@@ -185,18 +203,34 @@ impl Key for Posting {
 }
 
 // Represents a search result hit.
-struct Hit {
+#[derive(Clone, Debug)]
+pub struct Hit {
     // The document where the search result was found
     document_id: u64,
 
-    // String preview snippet of the match
-    snippet: String,
+    // Pairs of (field_index, field_name) that matched query
+    fields: HashMap<usize, String>,
 
-    // Which terms from the query matched in the document
-    query_term_matches: Vec<String>,
+    // Map from field_index (eg. "name", "bio", etc.) to snippets that show nearby text in source
+    // document.
+    field_snippets: HashMap<usize, Snippet>,
+}
 
-    // In which fields were the terms found
-    field_indexes: Vec<usize>,
+impl Hit {
+    fn new(document_id: u64) -> Hit {
+        Hit {
+            document_id,
+            fields: HashMap::new(),
+            field_snippets: HashMap::new(),
+        }
+    }
+}
+
+// Data structure that can be used to render snippet of nearby search text
+#[derive(Clone, Debug)]
+pub struct Snippet {
+    term_indices: Vec<usize>,
+    body: String,
 }
 
 impl SearchIndex {
@@ -209,33 +243,39 @@ impl SearchIndex {
             id_terms: HashMap::new(),
             id_postings: HashMap::new(),
             term_ids: HashMap::new(),
+            id_field_text: HashMap::new(),
+            id_field_terms: HashMap::new(),
         }
     }
 
     pub fn index(&mut self, document_id: u64, document_json: &serde_json::Value) {
         for field_index in 0..self.config.fields.len() {
             let field = self.config.fields[field_index].clone();
-            let terms = Analyzer::field_to_terms(document_json, &field);
+            let text = Analyzer::field_to_text(document_json, &field);
+            self.id_field_text
+                .insert((document_id, field_index), text.clone());
+            let terms = Analyzer::text_to_terms(&text);
+            self.id_field_terms
+                .insert((document_id, field_index), terms.clone());
             for (term_index, term) in terms.iter().enumerate() {
                 let posting = Posting {
                     document_id,
                     field_index,
                     term_index,
                 };
-                self.insert(term, posting);
+                self.insert(&term.normalized, posting);
             }
         }
     }
 
     pub fn search(&self, query: &str) -> Vec<Hit> {
-        // let mut ret = SearchResult::new();
-
         // Analyze query. Translate to terms.
         let query_terms = Analyzer::text_to_terms(query);
+        let query_terms = query_terms.iter().map(|t| &t.normalized);
 
-        // Create pairs of <query term, posting list>
+        // Look up postings for each query term.
         let mut query_term_postings = Vec::with_capacity(query_terms.len());
-        for (query_term_idx, query_term) in query_terms.iter().enumerate() {
+        for (query_term_idx, query_term) in query_terms.enumerate() {
             if let Some(postings) = self.term_postings.get(query_term) {
                 // If the query term appears in index, add its postings.
                 query_term_postings.push((query_term_idx, postings));
@@ -246,19 +286,37 @@ impl SearchIndex {
             }
         }
 
-        // Look for documents that contain all of the terms from the query. That is, look for the
-        // documents that contain the conjunction of all of the terms from the query, i.e.  `term1
-        // AND term2 AND term3 ...` etc.
-        //
-        // To accomplish this, we retrieve the posting lists for each individual term and find the
-        // intersection by document_id.
-        query_term_postings.sort_by_key(|pair| pair.1.len());
-        let mut merged_postings = SkipList::new();
+        // Find document_id intersection of all postings.
+        query_term_postings.sort_by_key(|(_, postings)| postings.len());
+        let mut intersection = SkipList::new();
         for (_query_term_idx, postings) in query_term_postings.into_iter() {
-            merged_postings = SkipList::intersect(&merged_postings, postings, true);
+            intersection = SkipList::intersect(&intersection, postings, true);
         }
 
-        Vec::new()
+        //  Given postings, compute hits, summarizing search results for each document. Each hit
+        //  shows field that matched and snippet showing surrounding text from original document.
+        let mut hits: Vec<Hit> = Vec::new();
+
+        for entry in intersection.iter() {
+            let posting = &entry.key;
+            let mut len = hits.len();
+            if len == 0 || hits[len - 1].document_id != posting.document_id {
+                let hit = Hit::new(posting.document_id);
+                hits.push(hit);
+                len += 1;
+            }
+            self.add_posting_to_hit(posting, &mut hits[len - 1]);
+        }
+
+        // Now that all hits are gathered, compute snippet text.
+        for mut hit in hits.iter_mut() {
+            for (field_index, ref mut snippet) in hit.field_snippets.iter_mut() {
+                snippet.body =
+                    self.compute_snippet_body(hit.document_id, *field_index, &snippet.term_indices);
+            }
+        }
+
+        hits
     }
 
     pub fn remove(&mut self, document_id: u64) {
@@ -371,6 +429,87 @@ impl SearchIndex {
         } else {
             Some(edit_distances[0].0.clone())
         }
+    }
+
+    fn add_posting_to_hit(&self, posting: &Posting, hit: &mut Hit) {
+        hit.fields
+            .entry(posting.field_index)
+            .or_insert_with(|| self.config.fields[posting.field_index].clone());
+
+        let snippet = hit
+            .field_snippets
+            .entry(posting.field_index)
+            .or_insert_with(|| Snippet {
+                term_indices: Vec::new(),
+                body: String::new(),
+            });
+        snippet.term_indices.push(posting.term_index);
+    }
+
+    fn compute_snippet_body(
+        &self,
+        document_id: u64,
+        field_index: usize,
+        hit_indices: &Vec<usize>,
+    ) -> String {
+        let pair = (document_id, field_index);
+        let text = self
+            .id_field_text
+            .get(&pair)
+            .expect("Each document field must have text");
+        let terms = self
+            .id_field_terms
+            .get(&pair)
+            .expect("Each document field must have terms");
+        let mut ret = String::new();
+        let mut h = 0;
+        let window = 10;
+        // To give context to user, show window of 10 words to left and 10 words to right of each
+        // hit.
+        let window_start = std::cmp::max(0, hit_indices[0] as isize - window as isize) as usize;
+        let mut window_end = std::cmp::min(terms.len() - 1, hit_indices[0] + window);
+        if window_start > 0 {
+            ret.push_str("... ");
+        }
+        let mut prev_text_last = None;
+        let mut i = window_start;
+        while i < terms.len() {
+            if i > window_end {
+                if h >= hit_indices.len() {
+                    break;
+                }
+                if i < hit_indices[h] - window {
+                    // Skip ahead to beginning of window around next hit.
+                    ret.push_str(" ... ");
+                    i = hit_indices[h] - window;
+                    window_end = hit_indices[h] + window;
+                }
+            }
+            let mut is_hit = false;
+            if h < hit_indices.len() && i == hit_indices[h] {
+                // If we encounter a hit, expand window some more.
+                window_end = i + window;
+                h += 1;
+                is_hit = true;
+            }
+            let term = &terms[i];
+            // Copy in all text between last term and this one (spaces, punctuation, etc.)
+            if let Some(prev_text_last) = prev_text_last {
+                ret.push_str(&text[(prev_text_last + 1)..term.text_first]);
+            }
+            // Add emphasis tags around hit.
+            if is_hit {
+                ret.push_str("<em>");
+            }
+            // Add the term's original text
+            ret.push_str(&text[term.text_first..=term.text_last]);
+            if is_hit {
+                ret.push_str("</em>")
+            }
+            prev_text_last = Some(term.text_last);
+            i += 1;
+        }
+        ret
     }
 }
 
@@ -530,5 +669,42 @@ mod tests {
         assert_eq!(0, search_index.term_postings.len());
         assert_eq!(0, search_index.id_terms.len());
         assert_eq!(0, search_index.id_postings.len());
+    }
+
+    #[test]
+    fn performs_simple_search() {
+        let mut search_index = SearchIndex::new(Config {
+            fields: vec!["name".to_string(), "bio".to_string()],
+        });
+        let doc1: Result<serde_json::Value, _> = serde_json::from_str(
+            r#"
+            {
+                "name": "Jane Smith",
+                "bio": "Jane is from the San Francisco Bay Area and serves as CEO of Foo inc."
+            }
+        "#,
+        );
+        let doc2: Result<serde_json::Value, _> = serde_json::from_str(
+            r#"
+            {
+                "name": "Samuel Wu",
+                "bio": "The first memory Samuel has is of playing basketball with his mother in Manhattan"
+            }
+        "#,
+        );
+        search_index.index(1, &doc1.unwrap());
+        search_index.index(2, &doc2.unwrap());
+
+        let hits = search_index.search("san francisco");
+        assert_eq!(hits.len(), 1);
+        let hit = &hits[0];
+        assert_eq!(hit.document_id, 1);
+        assert_eq!(1, hit.fields.len());
+        assert_eq!(hit.fields.get(&1).unwrap(), &"bio".to_string());
+        assert_eq!(1, hit.field_snippets.len());
+        let snippet = hit.field_snippets.get(&1).unwrap();
+        assert_eq!(snippet.term_indices, vec![4, 5]);
+        let expected_snippet_body = "Jane is from the <em>San</em> <em>Francisco</em> Bay Area and serves as CEO of Foo inc";
+        assert_eq!(snippet.body, expected_snippet_body);
     }
 }
