@@ -450,7 +450,7 @@ impl SearchIndex {
         &self,
         document_id: u64,
         field_index: usize,
-        hit_indices: &Vec<usize>,
+        hit_indices: &[usize],
     ) -> String {
         let pair = (document_id, field_index);
         let text = self
@@ -481,19 +481,21 @@ impl SearchIndex {
                 if i < hit_indices[h] - window {
                     // Skip ahead to beginning of window around next hit.
                     ret.push_str(" ... ");
+                    prev_text_last = None;
                     i = hit_indices[h] - window;
                     window_end = hit_indices[h] + window;
                 }
             }
-            let mut is_hit = false;
-            if h < hit_indices.len() && i == hit_indices[h] {
+            let is_hit = if h < hit_indices.len() && i == hit_indices[h] {
                 // If we encounter a hit, expand window some more.
                 window_end = i + window;
                 h += 1;
-                is_hit = true;
-            }
+                true
+            } else {
+                false
+            };
             let term = &terms[i];
-            // Copy in all text between last term and this one (spaces, punctuation, etc.)
+            // Add all text between last term and this one (spaces, punctuation, etc.)
             if let Some(prev_text_last) = prev_text_last {
                 ret.push_str(&text[(prev_text_last + 1)..term.text_first]);
             }
@@ -680,7 +682,7 @@ mod tests {
             r#"
             {
                 "name": "Jane Smith",
-                "bio": "Jane is from the San Francisco Bay Area and serves as CEO of Foo inc."
+                "bio": "Jane is from the San Francisco Bay Area and serves as CEO of Foo Inc."
             }
         "#,
         );
@@ -695,7 +697,7 @@ mod tests {
         search_index.index(1, &doc1.unwrap());
         search_index.index(2, &doc2.unwrap());
 
-        let hits = search_index.search("san francisco");
+        let hits = search_index.search("SAn francIsco");
         assert_eq!(hits.len(), 1);
         let hit = &hits[0];
         assert_eq!(hit.document_id, 1);
@@ -704,7 +706,73 @@ mod tests {
         assert_eq!(1, hit.field_snippets.len());
         let snippet = hit.field_snippets.get(&1).unwrap();
         assert_eq!(snippet.term_indices, vec![4, 5]);
-        let expected_snippet_body = "Jane is from the <em>San</em> <em>Francisco</em> Bay Area and serves as CEO of Foo inc";
+        let expected_snippet_body = "Jane is from the <em>San</em> <em>Francisco</em> Bay Area and serves as CEO of Foo Inc";
         assert_eq!(snippet.body, expected_snippet_body);
+
+        let hits = search_index.search("basketball samuel");
+        assert_eq!(hits.len(), 1);
+        let hit = &hits[0];
+        assert_eq!(hit.document_id, 2);
+        assert_eq!(2, hit.fields.len());
+        assert_eq!(hit.fields.get(&0).unwrap(), &"name".to_string());
+        assert_eq!(hit.fields.get(&1).unwrap(), &"bio".to_string());
+        assert_eq!(2, hit.field_snippets.len());
+        let snippet = hit.field_snippets.get(&0).unwrap();
+        assert_eq!(snippet.term_indices, vec![0]);
+        assert_eq!(snippet.body, "<em>Samuel</em> Wu".to_string());
+        let snippet = hit.field_snippets.get(&1).unwrap();
+        assert_eq!(snippet.term_indices, vec![3, 8]);
+        assert_eq!(snippet.body, "The first memory <em>Samuel</em> has is of playing <em>basketball</em> with his mother in Manhattan".to_string());
+    }
+
+    #[test]
+    fn generates_snippets_correctly_from_large_documents() {
+        let mut search_index = SearchIndex::new(Config {
+            fields: vec!["name".to_string(), "bio".to_string()],
+        });
+        let doc1: Result<serde_json::Value, _> = serde_json::from_str(
+            r#"
+            {
+                "name": "Jane Smith",
+                "bio": [
+                    "Jane is from the San Francisco Bay Area and serves as CEO of Foo Inc.",
+                    "She is on the board of Fortune 100 companies such as Facebook and Yahoo.",
+                    "One of her passions is helping teams build skilled datacenter teams.",
+                    "She graduated with a BS in Computer Science from Stanford University in 1998.",
+                    "She found that she relished in the challenges of wrestling with difficult hardware problems.",
+                    "Finally, she earned her PhD in Electrical Engineering in 2005."
+                ]
+            }
+        "#,
+        );
+        let doc2: Result<serde_json::Value, _> = serde_json::from_str(
+            r#"
+            {
+                "name": "Samuel Wu",
+                "bio": "The first memory Samuel has is of playing basketball with his mother in Manhattan"
+            }
+        "#,
+        );
+        search_index.index(1, &doc1.unwrap());
+        search_index.index(2, &doc2.unwrap());
+
+        let hits = search_index.search("ceo foo inc computer science electrical engineering");
+        assert_eq!(hits.len(), 1);
+        let hit = &hits[0];
+        assert_eq!(hit.fields.len(), 1);
+        assert_eq!(hit.fields.get(&1).unwrap(), &"bio".to_string());
+        assert_eq!(hit.field_snippets.len(), 1);
+        let snippet = hit.field_snippets.get(&1).unwrap();
+        assert_eq!(snippet.term_indices, vec![11, 13, 14, 46, 47, 73, 74]);
+        assert_eq!(
+            snippet.body,
+            "... is from the San Francisco Bay Area and serves as <em>CEO</em> of <em>Foo</em> \
+             <em>Inc</em>. She is on the board of Fortune 100 companies such ... build skilled \
+             datacenter teams. She graduated with a BS in <em>Computer</em> <em>Science</em> from \
+             Stanford University in 1998. She found that she relished ... with difficult hardware \
+             problems. Finally, she earned her PhD in <em>Electrical</em> <em>Engineering</em> in \
+             2005"
+                .to_string()
+        );
     }
 }
