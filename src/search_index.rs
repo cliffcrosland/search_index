@@ -1,8 +1,11 @@
-use analyzer::{Analyzer, Term};
-use skip_list::{Key, SkipList};
+mod analyzer;
 
 use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 use std::collections::{HashMap, HashSet};
+
+use analyzer::{Analyzer, Term};
+use crate::skip_list::{Key, SkipList};
 
 /// # Search Index
 ///
@@ -202,18 +205,35 @@ impl Key for Posting {
     }
 }
 
+#[derive(Serialize)]
+pub struct SearchResult {
+    pub spelling_correction: bool,
+    pub query_terms: Vec<String>,
+    pub hits: Vec<Hit>,
+}
+
+impl SearchResult {
+    fn empty(query_terms: Vec<String>) -> SearchResult {
+        SearchResult {
+            query_terms: query_terms,
+            spelling_correction: false,
+            hits: Vec::new(),
+        }
+    }
+}
+
 // Represents a search result hit.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Hit {
     // The document where the search result was found
-    document_id: u64,
+    pub document_id: u64,
 
     // Pairs of (field_index, field_name) that matched query
-    fields: HashMap<usize, String>,
+    pub fields: HashMap<usize, String>,
 
     // Map from field_index (eg. "name", "bio", etc.) to snippets that show nearby text in source
     // document.
-    field_snippets: HashMap<usize, Snippet>,
+    pub field_snippets: HashMap<usize, Snippet>,
 }
 
 impl Hit {
@@ -227,10 +247,29 @@ impl Hit {
 }
 
 // Data structure that can be used to render snippet of nearby search text
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Snippet {
     term_indices: Vec<usize>,
-    body: String,
+    pub body: String,
+}
+
+struct Candidate<'a> {
+    query_term: String,
+    postings: &'a SkipList<Posting, ()>,
+}
+
+impl<'a> Candidate<'a> {
+    fn new(query_term: String, postings: &'a SkipList<Posting, ()>) -> Candidate<'a> {
+        Candidate {
+            query_term,
+            postings,
+        }
+    }
+}
+
+struct CandidateIntersection {
+    query_terms: Vec<String>,
+    intersection: SkipList<Posting, ()>,
 }
 
 impl SearchIndex {
@@ -255,49 +294,81 @@ impl SearchIndex {
             self.id_field_text
                 .insert((document_id, field_index), text.clone());
             let terms = Analyzer::text_to_terms(&text);
+            let terms_without_normalized_strs = terms
+                .iter()
+                .map(|term| Term {
+                    text_first: term.text_first,
+                    text_last: term.text_last,
+                    term_index: term.term_index,
+                    normalized: String::new(),
+                })
+                .collect();
             self.id_field_terms
-                .insert((document_id, field_index), terms.clone());
+                .insert((document_id, field_index), terms_without_normalized_strs);
             for (term_index, term) in terms.iter().enumerate() {
                 let posting = Posting {
                     document_id,
                     field_index,
                     term_index,
                 };
-                self.insert(&term.normalized, posting);
+                self.insert_posting(&term.normalized, posting);
             }
         }
     }
 
-    pub fn search(&self, query: &str) -> Vec<Hit> {
+    pub fn search(&self, query: &str) -> SearchResult {
         // Analyze query. Translate to terms.
         let query_terms = Analyzer::text_to_terms(query);
-        let query_terms = query_terms.iter().map(|t| &t.normalized);
+        let query_terms: Vec<String> = query_terms.into_iter().map(|t| t.normalized).collect();
 
-        // Look up postings for each query term.
-        let mut query_term_postings = Vec::with_capacity(query_terms.len());
-        for (query_term_idx, query_term) in query_terms.enumerate() {
+        // Look up postings for each query term. If a query term wasn't found, use spelling
+        // correction to find good alternative candidates.
+        let mut query_term_candidates = Vec::with_capacity(query_terms.len());
+        let query_terms_len = query_terms.len();
+
+        let mut spelling_correction = false;
+        let mut failure = false;
+        for (query_term_idx, query_term) in query_terms.iter().enumerate() {
             if let Some(postings) = self.term_postings.get(query_term) {
-                // If the query term appears in index, add its postings.
-                query_term_postings.push((query_term_idx, postings));
-            } else if let Some(correction) = self.recommend_spelling_correction(query_term) {
-                // Recommend a spelling correction using trigrams and/or soundexes indices
-                // ret.recommend_spelling_correction.push((query_term_idx, correction));
-                dbg!(correction);
+                query_term_candidates.push(vec![Candidate::new(query_term.to_string(), postings)]);
+            } else {
+                // Look for spelling correction candidates.
+                spelling_correction = true;
+                let last_query_term = query_term_idx == query_terms_len - 1;
+                let corrections = self.recommend_spelling_corrections(query_term, last_query_term);
+                let mut candidates = Vec::new();
+                for correction in corrections {
+                    if let Some(postings) = self.term_postings.get(&correction) {
+                        candidates.push(Candidate::new(correction, postings));
+                    }
+                }
+                // If there are no candidate replacements, there are no documents matching all
+                // of the query terms.
+                if candidates.is_empty() {
+                    failure = true;
+                    break;
+                }
+                query_term_candidates.push(candidates);
             }
         }
 
-        // Find document_id intersection of all postings.
-        query_term_postings.sort_by_key(|(_, postings)| postings.len());
-        let mut intersection = SkipList::new();
-        for (_query_term_idx, postings) in query_term_postings.into_iter() {
-            intersection = SkipList::intersect(&intersection, postings, true);
+        if failure {
+            return SearchResult::empty(query_terms);
         }
+
+        // Find document_id intersection of all postings.
+        let candidate_intersection =
+            Self::compute_candidate_intersection(&query_term_candidates, spelling_correction);
+        if let None = candidate_intersection {
+            return SearchResult::empty(query_terms);
+        }
+        let candidate_intersection = candidate_intersection.unwrap();
 
         //  Given postings, compute hits, summarizing search results for each document. Each hit
         //  shows field that matched and snippet showing surrounding text from original document.
         let mut hits: Vec<Hit> = Vec::new();
 
-        for entry in intersection.iter() {
+        for entry in candidate_intersection.intersection.iter() {
             let posting = &entry.key;
             let mut len = hits.len();
             if len == 0 || hits[len - 1].document_id != posting.document_id {
@@ -309,14 +380,18 @@ impl SearchIndex {
         }
 
         // Now that all hits are gathered, compute snippet text.
-        for mut hit in hits.iter_mut() {
+        for hit in hits.iter_mut() {
             for (field_index, ref mut snippet) in hit.field_snippets.iter_mut() {
                 snippet.body =
                     self.compute_snippet_body(hit.document_id, *field_index, &snippet.term_indices);
             }
         }
 
-        hits
+        SearchResult {
+            query_terms: candidate_intersection.query_terms,
+            spelling_correction,
+            hits,
+        }
     }
 
     pub fn remove(&mut self, document_id: u64) {
@@ -325,7 +400,7 @@ impl SearchIndex {
         self.id_postings.remove(&document_id);
     }
 
-    fn insert(&mut self, term: &str, posting: Posting) {
+    fn insert_posting(&mut self, term: &str, posting: Posting) {
         // Update Term to Postings index
         let postings = self
             .term_postings
@@ -335,7 +410,7 @@ impl SearchIndex {
 
         // Update Trigram to Terms index
         for trigram in Analyzer::trigrams(term) {
-            let mut terms = self
+            let terms = self
                 .trigram_terms
                 .entry(trigram)
                 .or_insert_with(HashSet::new);
@@ -386,13 +461,13 @@ impl SearchIndex {
         }
         let postings = postings.unwrap();
         for term in terms.iter() {
-            let mut empty;
+            let empty;
             {
-                let mut term_postings = self.term_postings.get_mut(term);
-                if term_postings.is_none() {
+                let term_postings = self.term_postings.get_mut(term);
+                if let None = term_postings {
                     continue;
                 }
-                let mut term_postings = term_postings.unwrap();
+                let term_postings = term_postings.unwrap();
                 for posting in postings.iter() {
                     term_postings.remove(&posting);
                 }
@@ -404,8 +479,50 @@ impl SearchIndex {
         }
     }
 
-    fn recommend_spelling_correction(&self, term: &str) -> Option<String> {
-        // First, look for good trigram match
+    fn recommend_spelling_corrections(&self, term: &str, prefix_ok: bool) -> Vec<String> {
+        const MAX_EDIT_DISTANCE: usize = 10;
+        const NUM_CANDIDATES: usize = 10;
+
+        // Compute 3-character trigrams of the term. Find indexed terms that have the same
+        // trigrams. Compute the edit distance betwteen the term and each of the indexed terms. Use
+        // a binary heap to select the top few terms with smallest edit distance.
+
+        // Binary heap element definitions
+        struct TermEditDist {
+            term: String,
+            edit_distance: usize,
+        };
+        impl PartialEq for TermEditDist {
+            fn eq(&self, other: &Self) -> bool {
+                other.edit_distance == self.edit_distance && other.term.len() == self.term.len()
+            }
+        }
+        impl Eq for TermEditDist {}
+        impl Ord for TermEditDist {
+            fn cmp(&self, other: &Self) -> Ordering {
+                other
+                    .edit_distance
+                    .cmp(&self.edit_distance)
+                    .then_with(|| other.term.len().cmp(&self.term.len()))
+            }
+        };
+        impl PartialOrd for TermEditDist {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        };
+        impl TermEditDist {
+            fn new(term: &str, edit_distance: usize) -> TermEditDist {
+                TermEditDist {
+                    term: term.to_string(),
+                    edit_distance,
+                }
+            }
+        }
+
+        // First, look for good trigram match by edit distance. If `prefix_ok` flag is set, then we
+        // consider `edit_distance` to be 0 if `term` is a prefix of the trigram match. Helps us
+        // find matches as a user types.
         let trigrams = Analyzer::trigrams(term);
         let mut possible_corrections = HashSet::new();
         let mut edit_distances = Vec::new();
@@ -416,19 +533,153 @@ impl SearchIndex {
                         continue;
                     }
                     possible_corrections.insert(trigram_term);
-                    let edit_distance = Analyzer::edit_distance(trigram_term, &term.to_string());
-                    edit_distances.push((trigram_term, edit_distance));
+                    if prefix_ok && trigram_term.starts_with(term) {
+                        edit_distances.push(TermEditDist::new(trigram_term, 0));
+                        continue;
+                    }
+                    let edit_distance = Analyzer::edit_distance(trigram_term, term);
+                    if edit_distance <= MAX_EDIT_DISTANCE {
+                        edit_distances.push(TermEditDist::new(trigram_term, edit_distance));
+                    }
                 }
             }
         }
-        // TODO(cliff): Return several spelling corrections, try running search with each, return the
-        // most fruitful alternative query, etc.
-        edit_distances.sort_by_key(|pair| pair.1);
-        if edit_distances.is_empty() {
-            None
-        } else {
-            Some(edit_distances[0].0.clone())
+
+        // Take top few terms by edit distance
+        let mut heap = BinaryHeap::from(edit_distances);
+        let count = std::cmp::min(NUM_CANDIDATES, heap.len());
+        let mut ret = Vec::new();
+        for _ in 0..count {
+            ret.push(heap.pop().unwrap().term);
         }
+        ret
+    }
+
+    fn compute_candidate_intersection(
+        query_term_candidates: &Vec<Vec<Candidate>>,
+        spelling_correction: bool,
+    ) -> Option<CandidateIntersection> {
+        // If spelling correction was not needed, there is one candidate per query term.
+        if !spelling_correction {
+            let candidates: Vec<&Candidate> =
+                query_term_candidates.iter().map(|qtc| &qtc[0]).collect();
+            let candidate_postings: Vec<&SkipList<Posting, ()>> =
+                candidates.iter().map(|c| c.postings).collect();
+            let query_terms: Vec<String> =
+                candidates.iter().map(|c| c.query_term.clone()).collect();
+            let intersection = Self::find_document_intersection(candidate_postings);
+            return Some(CandidateIntersection {
+                query_terms,
+                intersection,
+            });
+        }
+
+        // If spelling correction was needed, there may be multiple candidates per query term. Try
+        // a few selections of candidates using the following algorithm:
+        //
+        // 1. Take the current candidate for each query term (starting at index 0).
+        // 2. Find the document intersection of these candidates.
+        // 3. If the intersection is non-zero, return it.
+        // 4. Otherwise, use the heap to find the query term that has the smallest postings size.
+        //    That might be the query term that is limiting our ability to find an intersection
+        //    because its posting list is small (just a heuristic). Select the next candidate for
+        //    that query term, and repeat at step 1. If we have exhausted the candidates for any
+        //    query term, then exit since no intersection can be found.
+        const MAX_ATTEMPTS: usize = 10;
+
+        // Binary heap element definitions
+        struct CandidateIter<'a> {
+            query_term_index: usize,
+            candidates: &'a Vec<Candidate<'a>>,
+            i: usize,
+        };
+        impl<'a> PartialEq for CandidateIter<'a> {
+            fn eq(&self, other: &Self) -> bool {
+                self.query_term_index == other.query_term_index && self.i == other.i
+            }
+        }
+        impl<'a> Eq for CandidateIter<'a> {}
+        impl<'a> Ord for CandidateIter<'a> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                other.candidates[other.i]
+                    .postings
+                    .len()
+                    .cmp(&self.candidates[self.i].postings.len())
+            }
+        };
+        impl<'a> PartialOrd for CandidateIter<'a> {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        // Initialize heap
+        let iters: Vec<CandidateIter> = query_term_candidates
+            .iter()
+            .enumerate()
+            .map(|(query_term_index, candidates)| CandidateIter {
+                query_term_index,
+                candidates: &candidates,
+                i: 0,
+            })
+            .collect();
+        let mut heap = BinaryHeap::from(iters);
+
+        // Make a finite number of attempts to find an intersection
+        for _ in 0..MAX_ATTEMPTS {
+            let mut candidates: Vec<(usize, &Candidate)> = heap
+                .iter()
+                .map(|ci| (ci.query_term_index, &ci.candidates[ci.i]))
+                .collect();
+            let candidate_postings: Vec<&SkipList<Posting, ()>> = candidates
+                .iter()
+                .map(|&(_query_term_index, candidate)| candidate.postings)
+                .collect();
+            let intersection = Self::find_document_intersection(candidate_postings);
+
+            // If intersection found, return it.
+            if !intersection.is_empty() {
+                candidates.sort_by_key(|&(query_term_index, _candidate)| query_term_index);
+                let query_terms = candidates
+                    .iter()
+                    .map(|(_query_term_index, candidate)| candidate.query_term.clone())
+                    .collect();
+                return Some(CandidateIntersection {
+                    query_terms,
+                    intersection,
+                });
+            }
+
+            // Otherwise, increment the query term whose candidate had the smallest posting list.
+            // That small posting list may have inhibited our ability to find an intersection
+            // because it is small (just a heuristic).
+            let iter = heap.pop();
+            match iter {
+                None => break,
+                Some(mut iter) => {
+                    iter.i += 1;
+                    if iter.i >= iter.candidates.len() {
+                        break;
+                    }
+                    heap.push(iter);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn find_document_intersection(
+        postings_list: Vec<&SkipList<Posting, ()>>,
+    ) -> SkipList<Posting, ()> {
+        let mut intersection = SkipList::new();
+        for postings in postings_list.iter() {
+            intersection = SkipList::intersect(&intersection, postings, true);
+            if intersection.is_empty() {
+                break;
+            }
+        }
+        return intersection;
     }
 
     fn add_posting_to_hit(&self, posting: &Posting, hit: &mut Hit) {
@@ -476,6 +727,9 @@ impl SearchIndex {
         while i < terms.len() {
             if i > window_end {
                 if h >= hit_indices.len() {
+                    if i < terms.len() - 1 {
+                        ret.push_str(" ...");
+                    }
                     break;
                 }
                 if i < hit_indices[h] - window {
@@ -621,7 +875,7 @@ mod tests {
             term_index: 2,
             document_id: 3,
         };
-        search_index.insert(&"foo".to_string(), posting);
+        search_index.insert_posting(&"foo".to_string(), posting);
         assert_eq!(1, search_index.term_postings.len());
         assert_eq!(1, search_index.id_terms.len());
         assert_eq!(1, search_index.id_postings.len());
@@ -644,13 +898,13 @@ mod tests {
             term_index: 0,
             document_id,
         };
-        search_index.insert(&"hello".to_string(), posting1);
+        search_index.insert_posting(&"hello".to_string(), posting1);
         let posting2 = Posting {
             field_index: 0,
             term_index: 1,
             document_id,
         };
-        search_index.insert(&"hello".to_string(), posting2);
+        search_index.insert_posting(&"hello".to_string(), posting2);
 
         assert_eq!(1, search_index.term_postings.len());
         assert_eq!(1, search_index.id_terms.len());
@@ -697,7 +951,10 @@ mod tests {
         search_index.index(1, &doc1.unwrap());
         search_index.index(2, &doc2.unwrap());
 
-        let hits = search_index.search("SAn francIsco");
+        let result = search_index.search("SAn francIsco");
+        assert_eq!(result.spelling_correction, false);
+        assert_eq!(result.query_terms, vec!["san", "francisco"]);
+        let hits = result.hits;
         assert_eq!(hits.len(), 1);
         let hit = &hits[0];
         assert_eq!(hit.document_id, 1);
@@ -709,7 +966,8 @@ mod tests {
         let expected_snippet_body = "Jane is from the <em>San</em> <em>Francisco</em> Bay Area and serves as CEO of Foo Inc";
         assert_eq!(snippet.body, expected_snippet_body);
 
-        let hits = search_index.search("basketball samuel");
+        let result = search_index.search("basketball samuel");
+        let hits = result.hits;
         assert_eq!(hits.len(), 1);
         let hit = &hits[0];
         assert_eq!(hit.document_id, 2);
@@ -740,7 +998,8 @@ mod tests {
                     "One of her passions is helping teams build skilled datacenter teams.",
                     "She graduated with a BS in Computer Science from Stanford University in 1998.",
                     "She found that she relished in the challenges of wrestling with difficult hardware problems.",
-                    "Finally, she earned her PhD in Electrical Engineering in 2005."
+                    "Finally, she earned her PhD in Electrical Engineering in 2005.",
+                    "One of her favorite pastimes is skiing at Lake Tahoe, where she spends almost each weekend."
                 ]
             }
         "#,
@@ -756,7 +1015,21 @@ mod tests {
         search_index.index(1, &doc1.unwrap());
         search_index.index(2, &doc2.unwrap());
 
-        let hits = search_index.search("ceo foo inc computer science electrical engineering");
+        let result = search_index.search("CEO foo inc Computer science electrical engineering");
+        assert_eq!(result.spelling_correction, false);
+        assert_eq!(
+            result.query_terms,
+            vec![
+                "ceo",
+                "foo",
+                "inc",
+                "computer",
+                "science",
+                "electrical",
+                "engineering"
+            ]
+        );
+        let hits = result.hits;
         assert_eq!(hits.len(), 1);
         let hit = &hits[0];
         assert_eq!(hit.fields.len(), 1);
@@ -771,8 +1044,59 @@ mod tests {
              datacenter teams. She graduated with a BS in <em>Computer</em> <em>Science</em> from \
              Stanford University in 1998. She found that she relished ... with difficult hardware \
              problems. Finally, she earned her PhD in <em>Electrical</em> <em>Engineering</em> in \
-             2005"
+             2005. One of her favorite pastimes is skiing at ..."
                 .to_string()
+        );
+    }
+
+    #[test]
+    fn performs_simple_spelling_correction() {
+        let mut search_index = SearchIndex::new(Config {
+            fields: vec!["name".to_string(), "bio".to_string()],
+        });
+        let doc1: Result<serde_json::Value, _> = serde_json::from_str(
+            r#"
+            {
+                "name": "Jane Smith",
+                "bio": [
+                    "Jane is from the San Francisco Bay Area and serves as CEO of Foo Inc.",
+                    "She is on the board of Fortune 100 companies such as Facebook and Yahoo.",
+                    "One of her passions is helping teams build skilled datacenter teams.",
+                    "She graduated with a BS in Computer Science from Stanford University in 1998.",
+                    "She found that she relished in the challenges of wrestling with difficult hardware problems.",
+                    "Finally, she earned her PhD in Electrical Engineering in 2005.",
+                    "One of her favorite pastimes is skiing at Lake Tahoe, where she spends almost each weekend."
+                ]
+            }
+        "#,
+        );
+        let doc2: Result<serde_json::Value, _> = serde_json::from_str(
+            r#"
+            {
+                "name": "Samuel Wu",
+                "bio": "The first memory Samuel has is of playing basketball with his mother in Manhattan"
+            }
+        "#,
+        );
+        search_index.index(1, &doc1.unwrap());
+        search_index.index(2, &doc2.unwrap());
+
+        let result = search_index.search("engineer electric");
+        assert_eq!(result.spelling_correction, true);
+        assert_eq!(result.query_terms, vec!["engineering", "electrical"]);
+        let hits = result.hits;
+        assert_eq!(hits.len(), 1);
+        let hit = &hits[0];
+        assert_eq!(hit.document_id, 1);
+        assert_eq!(hit.fields.len(), 1);
+        assert_eq!(hit.fields.get(&1).unwrap(), "bio");
+        let snippet = hit.field_snippets.get(&1).unwrap();
+        assert_eq!(snippet.term_indices, vec![73, 74]);
+        assert_eq!(
+            snippet.body,
+            "... with difficult hardware problems. Finally, she earned her PhD in \
+             <em>Electrical</em> <em>Engineering</em> in 2005. One of her favorite pastimes is \
+             skiing at ..."
         );
     }
 }

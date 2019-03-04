@@ -2,7 +2,7 @@ extern crate rand;
 
 use self::rand::Rng;
 
-use generational_arena::*;
+use crate::generational_arena::*;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -192,6 +192,11 @@ where
         self.nodes.len() - 1
     }
 
+    /// Whether the skip list is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Set a key-value entry in the skip list. Return exclusive reference to the value. Useful for
     /// in-place modification after insert.
     pub fn set(&mut self, key: &K, value: V) {
@@ -296,7 +301,7 @@ where
         for i in 0..res.traversal_stack.len() {
             let level = res.traversal_stack.len() - 1 - i;
             let prev_id = res.traversal_stack[i];
-            let mut prev_node = self.nodes.get_mut(&prev_id).unwrap();
+            let prev_node = self.nodes.get_mut(&prev_id).unwrap();
             {
                 let next = prev_node.levels[level];
                 if next.is_none() || next.unwrap() != node_id {
