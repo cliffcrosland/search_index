@@ -7,7 +7,9 @@ A document search index with the following goals:
 
 TODOs:
 [x] Use spelling correction for queries to make interaction easy.
-[ ] Run simple HTTP JSON API server.
-[ ] Sort search results.
+[x] Run simple HTTP JSON API server.
+[x] Build simple HTML and JS testing interface.
+[ ] Load large genealogy data set into index and interact with it in the UI.
+[ ] Sort search results
   [ ] TF-IDF? How closely words appear together? Prioritize field?
 [ ] Persist data to disk to recover quickly from closing, crashes.
