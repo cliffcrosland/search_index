@@ -374,7 +374,7 @@ where
         }
 
         let mut ret = SkipList::new();
-        if a.len() == 0 {
+        if a.is_empty() {
             for entry in b.iter() {
                 ret.set(&entry.key, entry.value.clone());
             }

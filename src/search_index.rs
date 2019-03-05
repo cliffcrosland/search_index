@@ -215,7 +215,7 @@ pub struct SearchResult {
 impl SearchResult {
     fn empty(query_terms: Vec<String>) -> SearchResult {
         SearchResult {
-            query_terms: query_terms,
+            query_terms,
             spelling_correction: false,
             hits: Vec::new(),
         }
@@ -359,7 +359,7 @@ impl SearchIndex {
         // Find document_id intersection of all postings.
         let candidate_intersection =
             Self::compute_candidate_intersection(&query_term_candidates, spelling_correction);
-        if let None = candidate_intersection {
+        if candidate_intersection.is_none() {
             return SearchResult::empty(query_terms);
         }
         let candidate_intersection = candidate_intersection.unwrap();
@@ -464,14 +464,14 @@ impl SearchIndex {
             let empty;
             {
                 let term_postings = self.term_postings.get_mut(term);
-                if let None = term_postings {
+                if term_postings.is_none() {
                     continue;
                 }
                 let term_postings = term_postings.unwrap();
                 for posting in postings.iter() {
                     term_postings.remove(&posting);
                 }
-                empty = term_postings.len() == 0;
+                empty = term_postings.is_empty();
             }
             if empty {
                 self.term_postings.remove(term);
@@ -556,7 +556,7 @@ impl SearchIndex {
     }
 
     fn compute_candidate_intersection(
-        query_term_candidates: &Vec<Vec<Candidate>>,
+        query_term_candidates: &[Vec<Candidate>],
         spelling_correction: bool,
     ) -> Option<CandidateIntersection> {
         // If spelling correction was not needed, there is one candidate per query term.
@@ -679,7 +679,7 @@ impl SearchIndex {
                 break;
             }
         }
-        return intersection;
+        intersection
     }
 
     fn add_posting_to_hit(&self, posting: &Posting, hit: &mut Hit) {

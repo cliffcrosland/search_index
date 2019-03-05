@@ -63,7 +63,9 @@ fn create_test_search_index() -> SearchIndex {
 #[template(path = "index.html")]
 struct IndexTemplate {}
 
-fn index((_state, _query): (State<AppState>, Query<HashMap<String, String>>)) -> Result<HttpResponse, Error> {
+fn index(
+    (_state, _query): (State<AppState>, Query<HashMap<String, String>>),
+) -> Result<HttpResponse, Error> {
     let template = IndexTemplate {};
     Ok(HttpResponse::Ok()
         .content_type("text/html")
@@ -73,15 +75,14 @@ fn index((_state, _query): (State<AppState>, Query<HashMap<String, String>>)) ->
 fn search(
     (state, query): (State<AppState>, Query<HashMap<String, String>>),
 ) -> Result<HttpResponse, Error> {
-    let response = if let Some(query) = query.get("query") {
+    if let Some(query) = query.get("query") {
         let result = state.search_index.search(query);
-        HttpResponse::Ok().json(result)
+        Ok(HttpResponse::Ok().json(result))
     } else {
-        HttpResponse::BadRequest()
+        Ok(HttpResponse::BadRequest()
             .content_type("application/json")
-            .body("{\"error\":\"query required\"}")
-    };
-    Ok(response)
+            .body("{\"error\":\"query required\"}"))
+    }
 }
 
 fn main() {

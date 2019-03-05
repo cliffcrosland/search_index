@@ -1,9 +1,155 @@
 <html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: arial, sans-serif;
+    }
+
+    #search_box {
+      font-size: 20px;
+      width: 400px;
+      padding: 10px;
+    }
+
+    .error {
+      color: red;
+    }
+
+    #results_view em {
+      font-style: normal;
+      font-weight: bold;
+      color: #545454;
+    }
+
+    .hit {
+      border: 1px solid #ddd;
+      padding: 10px 20px 10px;
+    }
+
+    .hit .title {
+      color: rgb(26, 13, 171);
+      font-size: 18px;
+    }
+
+    .hit .field {
+      margin: 10px 0 10px;
+      font-size: 13px;
+      line-height: 1.54em;
+    }
+
+    .hit .field .field-name {
+      color: #006621;
+      font-size: 14px;
+      line-height: 1.43;
+    }
+
+    .hit .field em {
+      color: #6a6a6a;
+    }
+  </style>
+</head>
 <body>
   <h1>Search Testing</h1>
   <div>
     <input type="text" id="search_box" />
   </div>
+  <div id="results_view">
+  </div>
+  <script>
+    window.addEventListener('load', () => {
+      const searchBox = document.getElementById('search_box');
+      searchBox.addEventListener('keyup', searchBoxKeyUp);
+      if (searchBox.value.length > 0) {
+        executeSearch(searchBox.value);
+      }
+    });
+
+    function searchBoxKeyUp(evt) {
+      executeSearch(evt.target.value);
+    }
+
+    function executeSearch(query) {
+      fetch(`http://localhost:8080/search?query=${query}`)
+        .then((result) => result.json())
+        .then((json) => renderSearchResult(query, json))
+        .catch(renderError);
+    }
+
+    function renderError(error) {
+      const view = document.getElementById('results_view');
+      while (view.lastChild) view.removeChild(view.lastChild);
+      const p = document.createElement('p');
+      p.className = "error";
+      if (!error || error.length == 0) {
+        p.innerText = "Error communicating with search index";
+      } else {
+        const pre = document.createElement('pre');
+        pre.innerText = JSON.stringify(error, null, 2);
+        p.appendChild(pre);
+      }
+      view.appendChild(p);
+    }
+
+    function renderSearchResult(query, searchResult) {
+      const view = document.getElementById('results_view');
+      while (view.lastChild) view.removeChild(view.lastChild);
+      /*
+      const pre = document.createElement('pre');
+      pre.innerText = JSON.stringify(searchResult, null, 2);
+      view.appendChild(pre);
+      */
+      const disclaimer = document.createElement('div');
+      const p1 = document.createElement('p');
+      const p2 = document.createElement('p');
+      if (query.length > 0 && searchResult.hits.length == 0) {
+        p1.innerHTML = `No results found for: <em>${query}</em>`;
+        p2.innerHTML = '&nbsp;';
+      } else if (searchResult.spelling_correction) {
+        p1.innerHTML = `No results found for: <em>${query}</em>`;
+        const correctedQuery = searchResult.query_terms.join(' ');
+        p2.innerHTML = `Searching instead for: <em>${correctedQuery}</em>`;
+      } else {
+        p1.innerHTML = '&nbsp;';
+        p2.innerHTML = '&nbsp;';
+      }
+      disclaimer.appendChild(p1);
+      disclaimer.appendChild(p2);
+      view.appendChild(disclaimer);
+      searchResult.hits.forEach((hit) => {
+        view.appendChild(renderHitView(hit));
+      });
+    }
+
+    function renderHitView(hit) {
+      const hitView = document.createElement('div');
+      hitView.className = 'hit';
+      const p = document.createElement('p');
+      p.className = 'title';
+      p.innerText = `Document ID ${hit.document_id}`;
+      hitView.appendChild(p);
+      let fields = Object.entries(hit.fields)
+        .map((pair) => {
+          return { indexStr: pair[0], index: parseInt(pair[0]), name: pair[1] };
+        });
+      fields.sort((a, b) => a.index - b.index);
+      fields.forEach((field) => {
+        const fieldView = document.createElement('div');
+        fieldView.className = 'field';
+        const d1 = document.createElement('div');
+        d1.className = 'field-name';
+        d1.innerText = field.name;
+        fieldView.appendChild(d1);
+        const snippetBody = hit.field_snippets[field.indexStr].body;
+        const d2 = document.createElement('div');
+        d2.className = 'snippet';
+        d2.innerHTML = snippetBody;
+        fieldView.appendChild(d2);
+        hitView.appendChild(fieldView);
+      });
+      return hitView;
+    }
+  </script>
 </body>
 </html>
 
