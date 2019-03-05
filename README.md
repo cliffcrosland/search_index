@@ -10,6 +10,7 @@ TODOs:
 [x] Run simple HTTP JSON API server.
 [x] Build simple HTML and JS testing interface.
 [ ] Load large genealogy data set into index and interact with it in the UI.
+[ ] Fix "single character" query term issue. Shouldn't have empty spelling correction suggestions.
 [ ] Sort search results
   [ ] TF-IDF? How closely words appear together? Prioritize field?
 [ ] Persist data to disk to recover quickly from closing, crashes.
