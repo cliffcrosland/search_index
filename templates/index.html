@@ -1,154 +1,118 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.4.1/semantic.min.css">
   <style>
-    body {
-      font-family: arial, sans-serif;
-    }
-
-    #search_box {
-      font-size: 20px;
-      width: 400px;
-      padding: 10px;
-    }
-
-    .error {
-      color: red;
-    }
-
-    #results_view em {
-      font-style: normal;
-      font-weight: bold;
-      color: #545454;
-    }
-
-    .hit {
-      border: 1px solid #ddd;
-      padding: 10px 20px 10px;
-    }
-
-    .hit .title {
-      color: rgb(26, 13, 171);
-      font-size: 18px;
-    }
-
-    .hit .field {
-      margin: 10px 0 10px;
-      font-size: 13px;
-      line-height: 1.54em;
-    }
-
-    .hit .field .field-name {
-      color: #006621;
-      font-size: 14px;
-      line-height: 1.43;
-    }
-
-    .hit .field em {
-      color: #6a6a6a;
-    }
+    body { padding: 30px; }
+    em { font-weight: bolder; font-style: normal; }
+    .error { color: red; }
   </style>
 </head>
 <body>
-  <h1>Search Testing</h1>
-  <div>
-    <input type="text" id="search_box" />
+  <div id="app" class="ui">
+    <h1>Search Testing</h1>
+
+    <div class="ui three cards">
+      <div class="ui card">
+        <div class="content">
+            <div class="ui icon input">
+              <input type="text" placeholder="Search..." v-on:keyup="executeSearch" v-model="query">
+              <i class="search icon"></i>
+            </div>
+        </div>
+        <div class="content">
+          <p v-if="error" class="error"><small><% error %></small></p>
+          <p v-for="disclaimer in disclaimers"><small><% disclaimer %></small></p>
+        </div>
+      </div>
+
+      <div class="ui card" v-for="hit in searchResultHits">
+        <div class="content">
+          <div class="header"><% hit.title %></div>
+          <div class="ui" v-for="fieldResult in hit.fieldResults">
+            <div class="meta">
+              <span class="category">
+                <% fieldResult.fieldName %>
+              </span>
+            </div>
+            <div class="description" v-html="fieldResult.snippet"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
-  <div id="results_view">
-  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
   <script>
-    window.addEventListener('load', () => {
-      const searchBox = document.getElementById('search_box');
-      searchBox.addEventListener('keyup', searchBoxKeyUp);
-      if (searchBox.value.length > 0) {
-        executeSearch(searchBox.value);
-      }
+    const app = new Vue({
+      el: '#app',
+      delimiters: ['<%', '%>'],
+      data: {
+        query: '',
+        error: null,
+        searchResult: null,
+        inFlight: false,
+        lastQuery: null,
+      },
+      methods: {
+        executeSearch: function () {
+          if (this.inFlight) return;
+          if (this.lastQuery == this.query) return;
+          const query = this.query;
+          this.inFlight = true;
+          fetch(`http://localhost:8080/search?query=${query}`)
+            .then((result) => result.json())
+            .then((json) => {
+              this.error = null;
+              this.searchResult = json;
+            })
+            .catch((error) => this.error = error)
+            .finally(() => {
+              this.inFlight = false;
+              this.lastQuery = query;
+              // User has typed in new query while this one was in-flight. Run
+              // new search request.
+              if (query != this.query) this.executeSearch();
+            });
+        },
+      },
+      computed: {
+        disclaimers: function () {
+          if (this.query.length == 0) {
+            return ['Type a search.'];
+          }
+          if (this.searchResult.hits.length == 0) {
+            return ['No hits found for query: ' + this.query];
+          }
+          let ret = [];
+          if (this.searchResult.spelling_correction) {
+            ret.push('No hits found for query: ' + this.query);
+            ret.push('Searching instead for: ' + this.searchResult.query_terms.join(' '));
+          }
+          const len = this.searchResult.hits.length;
+          const pluralized = len == 1 ? 'result' : 'results';
+          ret.push(`Found ${this.searchResult.hits.length} ${pluralized}.`);
+          return ret;
+        },
+        searchResultHits: function() {
+          if (!this.searchResult) return [];
+          return this.searchResult.hits.map((hit) => {
+            const title = `Document ID ${hit.document_id}`;
+            let fields = Object.entries(hit.fields).map((pair) => {
+              return { index: parseInt(pair[0]), indexStr: pair[0], fieldName: pair[1] };
+            });
+            fields.sort((a, b) => a.index - b.index);
+            const fieldResults = fields.map((field) => {
+              return {
+                fieldName: field.fieldName,
+                snippet: hit.field_snippets[field.indexStr].body,
+              };
+            });
+            return { title, fieldResults };
+          });
+        },
+      },
     });
-
-    function searchBoxKeyUp(evt) {
-      executeSearch(evt.target.value);
-    }
-
-    function executeSearch(query) {
-      fetch(`http://localhost:8080/search?query=${query}`)
-        .then((result) => result.json())
-        .then((json) => renderSearchResult(query, json))
-        .catch(renderError);
-    }
-
-    function renderError(error) {
-      const view = document.getElementById('results_view');
-      while (view.lastChild) view.removeChild(view.lastChild);
-      const p = document.createElement('p');
-      p.className = "error";
-      if (!error || error.length == 0) {
-        p.innerText = "Error communicating with search index";
-      } else {
-        const pre = document.createElement('pre');
-        pre.innerText = JSON.stringify(error, null, 2);
-        p.appendChild(pre);
-      }
-      view.appendChild(p);
-    }
-
-    function renderSearchResult(query, searchResult) {
-      const view = document.getElementById('results_view');
-      while (view.lastChild) view.removeChild(view.lastChild);
-      /*
-      const pre = document.createElement('pre');
-      pre.innerText = JSON.stringify(searchResult, null, 2);
-      view.appendChild(pre);
-      */
-      const disclaimer = document.createElement('div');
-      const p1 = document.createElement('p');
-      const p2 = document.createElement('p');
-      if (query.length > 0 && searchResult.hits.length == 0) {
-        p1.innerHTML = `No results found for: <em>${query}</em>`;
-        p2.innerHTML = '&nbsp;';
-      } else if (searchResult.spelling_correction) {
-        p1.innerHTML = `No results found for: <em>${query}</em>`;
-        const correctedQuery = searchResult.query_terms.join(' ');
-        p2.innerHTML = `Searching instead for: <em>${correctedQuery}</em>`;
-      } else {
-        p1.innerHTML = '&nbsp;';
-        p2.innerHTML = '&nbsp;';
-      }
-      disclaimer.appendChild(p1);
-      disclaimer.appendChild(p2);
-      view.appendChild(disclaimer);
-      searchResult.hits.forEach((hit) => {
-        view.appendChild(renderHitView(hit));
-      });
-    }
-
-    function renderHitView(hit) {
-      const hitView = document.createElement('div');
-      hitView.className = 'hit';
-      const p = document.createElement('p');
-      p.className = 'title';
-      p.innerText = `Document ID ${hit.document_id}`;
-      hitView.appendChild(p);
-      let fields = Object.entries(hit.fields)
-        .map((pair) => {
-          return { indexStr: pair[0], index: parseInt(pair[0]), name: pair[1] };
-        });
-      fields.sort((a, b) => a.index - b.index);
-      fields.forEach((field) => {
-        const fieldView = document.createElement('div');
-        fieldView.className = 'field';
-        const d1 = document.createElement('div');
-        d1.className = 'field-name';
-        d1.innerText = field.name;
-        fieldView.appendChild(d1);
-        const snippetBody = hit.field_snippets[field.indexStr].body;
-        const d2 = document.createElement('div');
-        d2.className = 'snippet';
-        d2.innerHTML = snippetBody;
-        fieldView.appendChild(d2);
-        hitView.appendChild(fieldView);
-      });
-      return hitView;
-    }
   </script>
 </body>
 </html>
